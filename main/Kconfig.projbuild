@@ -35,7 +35,7 @@ config CUSTOM_ASSETS_FILE
 
 choice
     prompt "Default Language"
-    default LANGUAGE_ZH_CN
+    default LANGUAGE_ZH_VI_VN
     help
         Select device display language
 
@@ -768,7 +768,7 @@ endchoice
 choice WK_BOARD_TYPE
     depends on BOARD_TYPE_WK_ESP32S3_DEV
     prompt "BOARD_TYPE_WK_ESP32S3_DEV"
-    default BOARD_NO_MOTOR_CONTROL
+    default BOARD_HAVE_MOTOR_CONTROL
     help
         Board Type
     config BOARD_HAVE_MOTOR_CONTROL
