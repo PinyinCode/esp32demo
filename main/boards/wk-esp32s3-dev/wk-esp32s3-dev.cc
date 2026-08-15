@@ -17,41 +17,7 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
-// Thêm vào board.cc của WK ESP32S3 Dev
-
 #include <driver/ledc.h>
-
-void InitializeMotor() {
-    // Timer PWM 50Hz cho servo
-    ledc_timer_config_t timer = {
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .duty_resolution = LEDC_TIMER_10_BIT,
-        .timer_num = LEDC_TIMER_0,
-        .freq_hz = 50,
-        .clk_cfg = LEDC_AUTO_CLK
-    };
-    ledc_timer_config(&timer);
-
-    // Servo 1 - GPIO_5
-    ledc_channel_config_t ch1 = {
-        .gpio_num = GPIO_NUM_5,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_0,
-        .timer_sel = LEDC_TIMER_0,
-        .duty = 0,
-    };
-    ledc_channel_config(&ch1);
-
-    // Servo 2 - GPIO_4
-    ledc_channel_config_t ch2 = {
-        .gpio_num = GPIO_NUM_4,
-        .speed_mode = LEDC_LOW_SPEED_MODE,
-        .channel = LEDC_CHANNEL_1,
-        .timer_sel = LEDC_TIMER_0,
-        .duty = 0,
-    };
-    ledc_channel_config(&ch2);
-}
 
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
@@ -68,7 +34,6 @@ void InitializeMotor() {
 #if defined(LCD_TYPE_GC9A01_SERIAL)
 #include "esp_lcd_gc9a01.h"
 static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
-    //  {cmd, { data }, data_size, delay_ms}
     {0xfe, (uint8_t[]){0x00}, 0, 0},
     {0xef, (uint8_t[]){0x00}, 0, 0},
     {0xb0, (uint8_t[]){0xc0}, 1, 0},
@@ -89,26 +54,18 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
     {0xe7, (uint8_t[]){0x5f}, 1, 0},
     {0xc6, (uint8_t[]){0x21}, 1, 0},
     {0xc7, (uint8_t[]){0x15}, 1, 0},
-    {0xf0,
-    (uint8_t[]){0x1D, 0x38, 0x09, 0x4D, 0x92, 0x2F, 0x35, 0x52, 0x1E, 0x0C,
-                0x04, 0x12, 0x14, 0x1f},
-    14, 0},
-    {0xf1,
-    (uint8_t[]){0x16, 0x40, 0x1C, 0x54, 0xA9, 0x2D, 0x2E, 0x56, 0x10, 0x0D,
-                0x0C, 0x1A, 0x14, 0x1E},
-    14, 0},
+    {0xf0, (uint8_t[]){0x1D, 0x38, 0x09, 0x4D, 0x92, 0x2F, 0x35, 0x52, 0x1E, 0x0C, 0x04, 0x12, 0x14, 0x1f}, 14, 0},
+    {0xf1, (uint8_t[]){0x16, 0x40, 0x1C, 0x54, 0xA9, 0x2D, 0x2E, 0x56, 0x10, 0x0D, 0x0C, 0x1A, 0x14, 0x1E}, 14, 0},
     {0xf4, (uint8_t[]){0x00, 0x00, 0xFF}, 3, 0},
     {0xba, (uint8_t[]){0xFF, 0xFF}, 2, 0},
 };
 #endif
- 
+
 #define TAG "WkEsp32s3Dev"
 
 class WkEsp32s3Dev : public WifiBoard {
 private:
- 
     Button boot_button_;
-    // LcdDisplay* display_;
     Display* display_ = nullptr;
     i2c_master_bus_handle_t display_i2c_bus_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
@@ -116,8 +73,42 @@ private:
     Button volume_up_button_;
     Button volume_down_button_;
 
+    // ===== KHỞI TẠO MOTOR (2 SERVO) =====
+    void InitializeMotor() {
+        ESP_LOGI(TAG, "Initialize Motor (2 Servos)");
+
+        ledc_timer_config_t timer = {
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .duty_resolution = LEDC_TIMER_10_BIT,
+            .timer_num = LEDC_TIMER_0,
+            .freq_hz = 50,
+            .clk_cfg = LEDC_AUTO_CLK
+        };
+        ledc_timer_config(&timer);
+
+        // Servo 1 - GPIO_5
+        ledc_channel_config_t ch1 = {
+            .gpio_num = GPIO_NUM_5,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+        };
+        ledc_channel_config(&ch1);
+
+        // Servo 2 - GPIO_4
+        ledc_channel_config_t ch2 = {
+            .gpio_num = GPIO_NUM_4,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_1,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+        };
+        ledc_channel_config(&ch2);
+    }
+
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-  void InitializeDisplayI2c() {
+    void InitializeDisplayI2c() {
         i2c_master_bus_config_t bus_config = {
             .i2c_port = (i2c_port_t)0,
             .sda_io_num = DISPLAY_SDA_PIN,
@@ -134,9 +125,6 @@ private:
     }
 
     void InitializeSsd1306Display() {
-        // SSD1306 config
-        // IDF 5.5 and 6.x declare these fields in a different order. Assign
-        // them individually so C++ designated-initializer ordering is irrelevant.
         esp_lcd_panel_io_i2c_config_t io_config = {};
         io_config.dev_addr = 0x3C;
         io_config.scl_speed_hz = 400 * 1000;
@@ -166,9 +154,7 @@ private:
 #else
         ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_));
 #endif
-        ESP_LOGI(TAG, "SSD1306 driver installed");
 
-        // Reset the display
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         if (esp_lcd_panel_init(panel_) != ESP_OK) {
             ESP_LOGE(TAG, "Failed to initialize display");
@@ -176,9 +162,6 @@ private:
             return;
         }
         ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false));
-
-        // Set the display to on
-        ESP_LOGI(TAG, "Turning display on");
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
         display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
@@ -197,9 +180,6 @@ private:
     }
 
     void InitializeLcdDisplay() {
-        // 液晶屏控制IO初始化
-        ESP_LOGD(TAG, "Install LCD panel IO");
-
         esp_lcd_panel_io_spi_config_t io_config = {};
         io_config.cs_gpio_num = DISPLAY_CS_PIN;
         io_config.dc_gpio_num = DISPLAY_DC_PIN;
@@ -210,9 +190,6 @@ private:
         io_config.lcd_param_bits = 8;
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &panel_io_));
-
-        // 初始化液晶屏驱动芯片
-        ESP_LOGD(TAG, "Install LCD driver");
 
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = DISPLAY_RST_PIN;
@@ -243,15 +220,13 @@ private:
         ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
 
         display_ = new SpiLcdDisplay(panel_io_, panel_,
-                                    DISPLAY_WIDTH,
-                                    DISPLAY_HEIGHT,
-                                    DISPLAY_OFFSET_X,
-                                    DISPLAY_OFFSET_Y,
-                                    DISPLAY_MIRROR_X,
-                                    DISPLAY_MIRROR_Y,
+                                    DISPLAY_WIDTH, DISPLAY_HEIGHT,
+                                    DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
+                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y,
                                     DISPLAY_SWAP_XY);
     }
 #endif
+
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
@@ -262,13 +237,10 @@ private:
             app.ToggleChatState();
         });
 
-
         volume_up_button_.OnClick([this]() {
             auto codec = GetAudioCodec();
             auto volume = codec->output_volume() + 10;
-            if (volume > 100) {
-                volume = 100;
-            }
+            if (volume > 100) volume = 100;
             codec->SetOutputVolume(volume);
             GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
@@ -281,9 +253,7 @@ private:
         volume_down_button_.OnClick([this]() {
             auto codec = GetAudioCodec();
             auto volume = codec->output_volume() - 10;
-            if (volume < 0) {
-                volume = 0;
-            }
+            if (volume < 0) volume = 0;
             codec->SetOutputVolume(volume);
             GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
         });
@@ -294,16 +264,20 @@ private:
         });
     }
 
-    // 物联网初始化，添加对 AI 可见设备
     void InitializeTools() {
         static LampController lamp(LAMP_GPIO);
     }
 
 public:
     WkEsp32s3Dev() :
-        boot_button_(BOOT_BUTTON_GPIO), 
+        boot_button_(BOOT_BUTTON_GPIO),
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO){
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
+
+#ifdef CONFIG_BOARD_HAVE_MOTOR_CONTROL
+        InitializeMotor();
+#endif
+
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
         InitializeSsd1306Display();
@@ -316,7 +290,6 @@ public:
 #endif
         InitializeButtons();
         InitializeTools();
-
     }
 
     virtual Led* GetLed() override {
@@ -327,8 +300,8 @@ public:
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
         static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-             AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, I2S_STD_SLOT_RIGHT,  // 扬声器右声道
-            AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN, I2S_STD_SLOT_LEFT); // 左声道 麦克风
+             AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, I2S_STD_SLOT_RIGHT,
+            AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN, I2S_STD_SLOT_LEFT);
 #else
         static NoAudioCodecDuplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
             AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN);
@@ -339,6 +312,7 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
+
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
     virtual Backlight* GetBacklight() override {
         if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
