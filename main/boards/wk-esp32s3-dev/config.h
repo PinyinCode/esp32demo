@@ -6,11 +6,10 @@
 #define AUDIO_INPUT_SAMPLE_RATE  16000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
 
-// 如果使用 Duplex I2S 模式，请注释下面一行
+// ===== ÂM THANH =====
 #define AUDIO_I2S_METHOD_SIMPLEX
 
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-    // audio i2s pin
     #define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_40
     #define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_42
     #define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_41
@@ -18,41 +17,49 @@
     #define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_47
     #define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_48
 #else
-
-    #define AUDIO_I2S_GPIO_WS GPIO_NUM_4
+    #define AUDIO_I2S_GPIO_WS   GPIO_NUM_4
     #define AUDIO_I2S_GPIO_BCLK GPIO_NUM_5
     #define AUDIO_I2S_GPIO_DIN  GPIO_NUM_6
     #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_7
-
 #endif
 
+// ===== MOTOR (2 SERVO) =====
+#define SERVO_1_PIN  GPIO_NUM_5
+#define SERVO_2_PIN  GPIO_NUM_4
 
-#ifdef  CONFIG_BOARD_NO_MOTOR_CONTROL  // 没有电机控制功能的版本
+// ===== CẢM BIẾN =====
+#define PIR_MOTION_SENSOR_PIN  GPIO_NUM_3
+#define ULTRASONIC_TRIG_PIN    GPIO_NUM_18
+#define ULTRASONIC_ECHO_PIN    GPIO_NUM_17
+
+// ===== MẠCH SẠC PIN =====
+#define POWER_CHARGE_DETECT_PIN GPIO_NUM_14
+#define POWER_ADC_UNIT          ADC_UNIT_1
+#define POWER_ADC_CHANNEL       ADC_CHANNEL_2
+
+// ===== LED & NÚT =====
+#ifdef CONFIG_BOARD_NO_MOTOR_CONTROL
     #define BUILTIN_LED_GPIO        GPIO_NUM_14
     #define BOOT_BUTTON_GPIO        GPIO_NUM_0
     #define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
     #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_38
     #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_39
 
-    // lcd pin
     #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_10
     #define DISPLAY_MOSI_PIN      GPIO_NUM_8
     #define DISPLAY_CLK_PIN       GPIO_NUM_9
     #define DISPLAY_DC_PIN        GPIO_NUM_12
     #define DISPLAY_RST_PIN       GPIO_NUM_13
     #define DISPLAY_CS_PIN        GPIO_NUM_11
-
 #endif
 
-#ifdef  CONFIG_BOARD_HAVE_MOTOR_CONTROL  // 有电机控制功能的版本
-
+#ifdef CONFIG_BOARD_HAVE_MOTOR_CONTROL
     #define BUILTIN_LED_GPIO        GPIO_NUM_NC
     #define BOOT_BUTTON_GPIO        GPIO_NUM_0
     #define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
     #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
     #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
 
-    // lcd
     #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_19
     #define DISPLAY_MOSI_PIN      GPIO_NUM_8
     #define DISPLAY_CLK_PIN       GPIO_NUM_9
@@ -61,13 +68,11 @@
     #define DISPLAY_CS_PIN        GPIO_NUM_20
 #endif
 
-
+// ===== MÀN HÌNH =====
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-    // WK ESP32S3 DEV 使用 OLED
     #define DISPLAY_SDA_PIN GPIO_NUM_8
     #define DISPLAY_SCL_PIN GPIO_NUM_9
     #define DISPLAY_WIDTH   128
-
     #define DISPLAY_MIRROR_X true
     #define DISPLAY_MIRROR_Y true
 
@@ -83,7 +88,6 @@
     #endif
 
 #elif CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
-    // WK ESP32S3 DEV 使用 LCD
     #ifdef CONFIG_LCD_ST7789_240X320
     #define LCD_TYPE_ST7789_SERIAL
     #define DISPLAY_WIDTH   240
@@ -309,7 +313,6 @@
     #define DISPLAY_SPI_MODE 0
     #endif
 
-    // 新增
     #ifdef CONFIG_LCD_NV3030B_240X320
     #define LCD_TYPE_NV3030B_SERIAL
     #define DISPLAY_WIDTH   240
@@ -325,7 +328,6 @@
     #define DISPLAY_SPI_MODE 0
     #endif
 
-    // 新增
     #ifdef CONFIG_LCD_ILI9486_320X480
     #define LCD_TYPE_ILI9486_SERIAL
     #define DISPLAY_WIDTH   320
@@ -356,7 +358,7 @@
     #endif
 #endif
 
-// A MCP Test: Control a lamp
+// ===== LAMP =====
 #define LAMP_GPIO GPIO_NUM_15
 
 #endif // _BOARD_CONFIG_H_
