@@ -22,6 +22,8 @@
 #include <driver/gpio.h>
 #include <esp_rom_sys.h>
 #include <esp_adc/adc_oneshot.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
@@ -85,6 +87,37 @@ private:
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
 
     friend class SensorController;
+
+    // ===== ĐÈN CHỚP THEO TRẠNG THÁI AI =====
+    void UpdateLampByState() {
+        auto& app = Application::GetInstance();
+        auto state = app.GetDeviceState();
+        
+        switch (state) {
+            case kDeviceStateListening:
+                gpio_set_level(LAMP_GPIO, 1);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                gpio_set_level(LAMP_GPIO, 0);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                break;
+            case kDeviceStateSpeaking:
+                gpio_set_level(LAMP_GPIO, 1);
+                break;
+            case kDeviceStateIdle:
+                gpio_set_level(LAMP_GPIO, 0);
+                break;
+            default:
+                break;
+        }
+    }
+
+    static void LampStateTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        while (1) {
+            board->UpdateLampByState();
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+    }
 
     // ===== MOTOR =====
     void InitializeMotor() {
@@ -271,6 +304,9 @@ public:
         InitializeLampMcp();
         InitializeAdc();
         InitializeBatteryMcp();
+
+        // ===== TASK ĐÈN CHỚP THEO TRẠNG THÁI =====
+        xTaskCreate(LampStateTask, "lamp_state", 2048, this, 5, nullptr);
 
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
