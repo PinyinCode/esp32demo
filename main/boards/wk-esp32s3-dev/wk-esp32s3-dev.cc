@@ -12,25 +12,26 @@
 #include "assets/lang_config.h"
 #include <wifi_station.h>
 #include <esp_log.h>
+#include <esp_timer.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
 #include <driver/ledc.h>
+#include <driver/gpio.h>
+#include <esp_rom_sys.h>
+#include <esp_adc/adc_oneshot.h>
 
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
 #endif
-
 #if defined(LCD_TYPE_NV3030B_SERIAL)
 #include "esp_lcd_nv3030b.h"
 #endif
-
 #if defined(LCD_TYPE_ILI9486_SERIAL)
 #include "esp_lcd_ili9486.h"
 #endif
-
 #if defined(LCD_TYPE_GC9A01_SERIAL)
 #include "esp_lcd_gc9a01.h"
 static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
@@ -63,6 +64,14 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 
 #define TAG "WkEsp32s3Dev"
 
+class WkEsp32s3Dev;
+
+// ===== SENSOR CONTROLLER =====
+class SensorController {
+public:
+    SensorController(WkEsp32s3Dev* board);
+};
+
 class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
@@ -72,11 +81,14 @@ private:
     esp_lcd_panel_handle_t panel_ = nullptr;
     Button volume_up_button_;
     Button volume_down_button_;
+    SensorController* sensor_controller_ = nullptr;
+    adc_oneshot_unit_handle_t adc_handle_ = nullptr;
 
-    // ===== KHỞI TẠO MOTOR (2 SERVO) =====
+    friend class SensorController;
+
+    // ===== MOTOR =====
     void InitializeMotor() {
         ESP_LOGI(TAG, "Initialize Motor (2 Servos)");
-
         ledc_timer_config_t timer = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
             .duty_resolution = LEDC_TIMER_10_BIT,
@@ -86,7 +98,6 @@ private:
         };
         ledc_timer_config(&timer);
 
-        // Servo 1 - GPIO_5
         ledc_channel_config_t ch1 = {
             .gpio_num = GPIO_NUM_5,
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -96,7 +107,6 @@ private:
         };
         ledc_channel_config(&ch1);
 
-        // Servo 2 - GPIO_4
         ledc_channel_config_t ch2 = {
             .gpio_num = GPIO_NUM_4,
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -107,6 +117,200 @@ private:
         ledc_channel_config(&ch2);
     }
 
+    // ===== PIR =====
+    void InitializePirSensor() {
+        gpio_config_t io_conf = {
+            .pin_bit_mask = 1ULL << GPIO_NUM_3,
+            .mode = GPIO_MODE_INPUT,
+        };
+        gpio_config(&io_conf);
+    }
+
+    // ===== ULTRASONIC =====
+    void InitializeUltrasonic() {
+        gpio_config_t trig_conf = {
+            .pin_bit_mask = 1ULL << GPIO_NUM_18,
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        gpio_config(&trig_conf);
+
+        gpio_config_t echo_conf = {
+            .pin_bit_mask = 1ULL << GPIO_NUM_17,
+            .mode = GPIO_MODE_INPUT,
+        };
+        gpio_config(&echo_conf);
+    }
+
+    // ===== LAMP GPIO =====
+    void InitializeLampGpio() {
+        gpio_config_t io_conf = {
+            .pin_bit_mask = 1ULL << LAMP_GPIO,
+            .mode = GPIO_MODE_OUTPUT,
+        };
+        gpio_config(&io_conf);
+        gpio_set_level(LAMP_GPIO, 0);
+    }
+
+    // ===== ADC (PIN) =====
+    void InitializeAdc() {
+        adc_oneshot_unit_init_cfg_t init_config = {
+            .unit_id = POWER_ADC_UNIT,
+        };
+        adc_oneshot_new_unit(&init_config, &adc_handle_);
+
+        adc_oneshot_chan_cfg_t config = {
+            .atten = ADC_ATTEN_DB_12,
+            .bitwidth = ADC_BITWIDTH_12,
+        };
+        adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config);
+    }
+
+    // ===== MCP: MOTOR =====
+    void InitializeMotorMcp() {
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.motor.servo1_move", "Servo 1 (0-180)",
+            PropertyList({Property("angle", kPropertyTypeInteger, 90, 0, 180)}),
+            [](const PropertyList& p) -> ReturnValue {
+                int angle = p["angle"].value<int>();
+                uint32_t duty = (angle * 1023 / 180) + 26;
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                return true;
+            });
+        mcp.AddTool("self.motor.servo2_move", "Servo 2 (0-180)",
+            PropertyList({Property("angle", kPropertyTypeInteger, 90, 0, 180)}),
+            [](const PropertyList& p) -> ReturnValue {
+                int angle = p["angle"].value<int>();
+                uint32_t duty = (angle * 1023 / 180) + 26;
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, duty);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+                return true;
+            });
+        mcp.AddTool("self.motor.servo_reset", "Reset servo về 90 độ",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                uint32_t duty = (90 * 1023 / 180) + 26;
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+                ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, duty);
+                ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+                return true;
+            });
+    }
+
+    // ===== MCP: LAMP =====
+    void InitializeLampMcp() {
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.lamp.on", "Bật đèn",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(LAMP_GPIO, 1);
+                return "Đã bật đèn";
+            });
+        mcp.AddTool("self.lamp.off", "Tắt đèn",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(LAMP_GPIO, 0);
+                return "Đã tắt đèn";
+            });
+        mcp.AddTool("self.lamp.toggle", "Bật/tắt đèn",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                static bool state = false;
+                state = !state;
+                gpio_set_level(LAMP_GPIO, state ? 1 : 0);
+                return state ? "Đèn đang bật" : "Đèn đang tắt";
+            });
+        mcp.AddTool("self.lamp.status", "Trạng thái đèn",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return gpio_get_level(LAMP_GPIO) ? "Đèn đang bật" : "Đèn đang tắt";
+            });
+    }
+
+    // ===== MCP: BATTERY =====
+    void InitializeBatteryMcp() {
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.battery.level", "Mức pin (%)",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                int adc_value = 0;
+                adc_oneshot_read(adc_handle_, POWER_ADC_CHANNEL, &adc_value);
+                int level = (adc_value * 100) / 4095;
+                char result[32];
+                snprintf(result, sizeof(result), "%d%%", level);
+                return std::string(result);
+            });
+        mcp.AddTool("self.battery.charging", "Kiểm tra đang sạc",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return gpio_get_level((gpio_num_t)POWER_CHARGE_DETECT_PIN) == 1 ? "Đang sạc" : "Không sạc";
+            });
+    }
+
+    // ===== MCP: SENSOR =====
+    void InitializeSensorMcp() {
+        sensor_controller_ = new SensorController(this);
+    }
+
+public:
+    WkEsp32s3Dev() :
+        boot_button_(BOOT_BUTTON_GPIO),
+        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
+
+#ifdef CONFIG_BOARD_HAVE_MOTOR_CONTROL
+        InitializeMotor();
+        InitializeMotorMcp();
+#endif
+
+        InitializePirSensor();
+        InitializeUltrasonic();
+        InitializeSensorMcp();
+        InitializeLampGpio();
+        InitializeLampMcp();
+        InitializeAdc();
+        InitializeBatteryMcp();
+
+#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
+        InitializeDisplayI2c();
+        InitializeSsd1306Display();
+#elif CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
+        InitializeSpi();
+        InitializeLcdDisplay();
+        if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
+            GetBacklight()->RestoreBrightness();
+        }
+#endif
+        InitializeButtons();
+        InitializeTools();
+    }
+
+    // ===== ĐỌC CẢM BIẾN =====
+    bool ReadMotionDetected() {
+        return gpio_get_level(GPIO_NUM_3) == 1;
+    }
+
+    float ReadDistanceCm() {
+        gpio_set_level(GPIO_NUM_18, 0);
+        esp_rom_delay_us(2);
+        gpio_set_level(GPIO_NUM_18, 1);
+        esp_rom_delay_us(10);
+        gpio_set_level(GPIO_NUM_18, 0);
+
+        int timeout = 100000;
+        while (gpio_get_level(GPIO_NUM_17) == 0 && timeout > 0) timeout--;
+        int64_t start = esp_timer_get_time();
+
+        timeout = 100000;
+        while (gpio_get_level(GPIO_NUM_17) == 1 && timeout > 0) timeout--;
+        int64_t end = esp_timer_get_time();
+
+        float duration = (end - start) / 1000000.0f;
+        return duration * 34300.0f / 2.0f;
+    }
+
+    // ===== OLED =====
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
     void InitializeDisplayI2c() {
         i2c_master_bus_config_t bus_config = {
@@ -115,11 +319,7 @@ private:
             .scl_io_num = DISPLAY_SCL_PIN,
             .clk_source = I2C_CLK_SRC_DEFAULT,
             .glitch_ignore_cnt = 7,
-            .intr_priority = 0,
-            .trans_queue_depth = 0,
-            .flags = {
-                .enable_internal_pullup = 1,
-            },
+            .flags = {.enable_internal_pullup = 1},
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &display_i2c_bus_));
     }
@@ -132,14 +332,9 @@ private:
         io_config.dc_bit_offset = 6;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
-        io_config.on_color_trans_done = nullptr;
-        io_config.user_ctx = nullptr;
-        io_config.flags.dc_low_on_data = 0;
-        io_config.flags.disable_control_phase = 0;
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(display_i2c_bus_, &io_config, &panel_io_));
 
-        ESP_LOGI(TAG, "Install SSD1306 driver");
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = GPIO_NUM_NC;
         panel_config.bits_per_pixel = 1;
@@ -154,27 +349,18 @@ private:
 #else
         ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_));
 #endif
-
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
-        if (esp_lcd_panel_init(panel_) != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to initialize display");
-            display_ = new NoDisplay();
-            return;
-        }
-        ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, false));
+        ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
         display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
     }
-
 #elif CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
     void InitializeSpi() {
         spi_bus_config_t buscfg = {};
         buscfg.mosi_io_num = DISPLAY_MOSI_PIN;
         buscfg.miso_io_num = GPIO_NUM_NC;
         buscfg.sclk_io_num = DISPLAY_CLK_PIN;
-        buscfg.quadwp_io_num = GPIO_NUM_NC;
-        buscfg.quadhd_io_num = GPIO_NUM_NC;
         buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
         ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
     }
@@ -188,7 +374,6 @@ private:
         io_config.trans_queue_depth = 10;
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
-
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(SPI3_HOST, &io_config, &panel_io_));
 
         esp_lcd_panel_dev_config_t panel_config = {};
@@ -215,15 +400,11 @@ private:
 
         ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
         ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));
-        ESP_ERROR_CHECK(esp_lcd_panel_invert_color(panel_, DISPLAY_INVERT_COLOR));
-        ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel_, DISPLAY_SWAP_XY));
-        ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel_, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y));
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
-        display_ = new SpiLcdDisplay(panel_io_, panel_,
-                                    DISPLAY_WIDTH, DISPLAY_HEIGHT,
+        display_ = new SpiLcdDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT,
                                     DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y,
-                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y,
-                                    DISPLAY_SWAP_XY);
+                                    DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 #endif
 
@@ -236,60 +417,10 @@ private:
             }
             app.ToggleChatState();
         });
-
-        volume_up_button_.OnClick([this]() {
-            auto codec = GetAudioCodec();
-            auto volume = codec->output_volume() + 10;
-            if (volume > 100) volume = 100;
-            codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
-        });
-
-        volume_up_button_.OnLongPress([this]() {
-            GetAudioCodec()->SetOutputVolume(100);
-            GetDisplay()->ShowNotification(Lang::Strings::MAX_VOLUME);
-        });
-
-        volume_down_button_.OnClick([this]() {
-            auto codec = GetAudioCodec();
-            auto volume = codec->output_volume() - 10;
-            if (volume < 0) volume = 0;
-            codec->SetOutputVolume(volume);
-            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
-        });
-
-        volume_down_button_.OnLongPress([this]() {
-            GetAudioCodec()->SetOutputVolume(0);
-            GetDisplay()->ShowNotification(Lang::Strings::MUTED);
-        });
     }
 
     void InitializeTools() {
         static LampController lamp(LAMP_GPIO);
-    }
-
-public:
-    WkEsp32s3Dev() :
-        boot_button_(BOOT_BUTTON_GPIO),
-        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
-
-#ifdef CONFIG_BOARD_HAVE_MOTOR_CONTROL
-        InitializeMotor();
-#endif
-
-#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-        InitializeDisplayI2c();
-        InitializeSsd1306Display();
-#elif CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
-        InitializeSpi();
-        InitializeLcdDisplay();
-        if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
-            GetBacklight()->RestoreBrightness();
-        }
-#endif
-        InitializeButtons();
-        InitializeTools();
     }
 
     virtual Led* GetLed() override {
@@ -312,16 +443,33 @@ public:
     virtual Display* GetDisplay() override {
         return display_;
     }
-
-#if CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
-    virtual Backlight* GetBacklight() override {
-        if (DISPLAY_BACKLIGHT_PIN != GPIO_NUM_NC) {
-            static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
-            return &backlight;
-        }
-        return nullptr;
-    }
-#endif
 };
+
+// ===== SENSOR CONTROLLER IMPLEMENTATION =====
+SensorController::SensorController(WkEsp32s3Dev* board) {
+    auto& mcp = McpServer::GetInstance();
+
+    mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
+        PropertyList(),
+        [board](const PropertyList& p) -> ReturnValue {
+            return board->ReadMotionDetected() ? "Có chuyển động" : "Không có chuyển động";
+        });
+
+    mcp.AddTool("self.sensor.distance", "Đọc khoảng cách (cm)",
+        PropertyList(),
+        [board](const PropertyList& p) -> ReturnValue {
+            char result[32];
+            snprintf(result, sizeof(result), "%.1f cm", board->ReadDistanceCm());
+            return std::string(result);
+        });
+
+    mcp.AddTool("self.sensor.obstacle_check", "Kiểm tra vật cản",
+        PropertyList({Property("threshold_cm", kPropertyTypeInteger, 30, 5, 200)}),
+        [board](const PropertyList& p) -> ReturnValue {
+            float distance = board->ReadDistanceCm();
+            int threshold = p["threshold_cm"].value<int>();
+            return distance < threshold ? "Có vật cản" : "Không có vật cản";
+        });
+}
 
 DECLARE_BOARD(WkEsp32s3Dev);
