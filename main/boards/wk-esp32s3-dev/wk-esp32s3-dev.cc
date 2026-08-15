@@ -17,7 +17,41 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
+// Thêm vào board.cc của WK ESP32S3 Dev
 
+#include <driver/ledc.h>
+
+void InitializeMotor() {
+    // Timer PWM 50Hz cho servo
+    ledc_timer_config_t timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .duty_resolution = LEDC_TIMER_10_BIT,
+        .timer_num = LEDC_TIMER_0,
+        .freq_hz = 50,
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&timer);
+
+    // Servo 1 - GPIO_5
+    ledc_channel_config_t ch1 = {
+        .gpio_num = GPIO_NUM_5,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_0,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 0,
+    };
+    ledc_channel_config(&ch1);
+
+    // Servo 2 - GPIO_4
+    ledc_channel_config_t ch2 = {
+        .gpio_num = GPIO_NUM_4,
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel = LEDC_CHANNEL_1,
+        .timer_sel = LEDC_TIMER_0,
+        .duty = 0,
+    };
+    ledc_channel_config(&ch2);
+}
 
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
