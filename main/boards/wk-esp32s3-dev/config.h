@@ -3,362 +3,60 @@
 
 #include <driver/gpio.h>
 
+// ===== CẤU HÌNH ÂM THANH =====
 #define AUDIO_INPUT_SAMPLE_RATE  16000
 #define AUDIO_OUTPUT_SAMPLE_RATE 24000
-#define AUDIO_INPUT_REFERENCE true    // ← BẬT AEC
-// ===== ÂM THANH =====
+#define AUDIO_INPUT_REFERENCE true
 #define AUDIO_I2S_METHOD_SIMPLEX
 
+// ===== MIC INMP441 =====
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-    #define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_40
-    #define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_42
-    #define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_41
-    #define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_21
-    #define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_47
-    #define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_48
-#else
-    #define AUDIO_I2S_GPIO_WS   GPIO_NUM_4
-    #define AUDIO_I2S_GPIO_BCLK GPIO_NUM_5
-    #define AUDIO_I2S_GPIO_DIN  GPIO_NUM_6
-    #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_7
+    #define AUDIO_I2S_MIC_GPIO_WS   GPIO_NUM_4
+    #define AUDIO_I2S_MIC_GPIO_SCK  GPIO_NUM_5
+    #define AUDIO_I2S_MIC_GPIO_DIN  GPIO_NUM_6
+    
+    // ===== MAX98357A =====
+    #define AUDIO_I2S_SPK_GPIO_DOUT GPIO_NUM_7
+    #define AUDIO_I2S_SPK_GPIO_BCLK GPIO_NUM_15
+    #define AUDIO_I2S_SPK_GPIO_LRCK GPIO_NUM_16
 #endif
 
-// ===== MOTOR (2 SERVO) - KHÔNG XUNG ĐỘT =====
-#define SERVO_1_PIN  GPIO_NUM_10
-#define SERVO_2_PIN  GPIO_NUM_11
+// ===== MÀN HÌNH OLED SSD1306 (I2C) =====
+#define DISPLAY_SDA_PIN GPIO_NUM_41
+#define DISPLAY_SCL_PIN GPIO_NUM_42
+#define DISPLAY_WIDTH   128
+#define DISPLAY_HEIGHT  64
+#define DISPLAY_MIRROR_X true
+#define DISPLAY_MIRROR_Y true
 
-// ===== CẢM BIẾN =====
-#define PIR_MOTION_SENSOR_PIN  GPIO_NUM_3
-#define ULTRASONIC_TRIG_PIN    GPIO_NUM_18
-#define ULTRASONIC_ECHO_PIN    GPIO_NUM_17
+// ===== CẢM BIẾN KHOẢNG CÁCH (I2C) =====
+#define ULTRASONIC_SCL_PIN GPIO_NUM_39
+#define ULTRASONIC_SDA_PIN GPIO_NUM_40
 
-// ===== MẠCH SẠC PIN =====
-#define POWER_CHARGE_DETECT_PIN GPIO_NUM_16
-#define POWER_ADC_UNIT          ADC_UNIT_1
-#define POWER_ADC_CHANNEL       ADC_CHANNEL_2
+// ===== ĐỘNG CƠ DRV8833 =====
+#define DRV8833_IN1 GPIO_NUM_1
+#define DRV8833_IN2 GPIO_NUM_2
+#define DRV8833_IN3 GPIO_NUM_21
+#define DRV8833_IN4 GPIO_NUM_8
 
-// ===== LED & NÚT =====
-#ifdef CONFIG_BOARD_NO_MOTOR_CONTROL
-    #define BUILTIN_LED_GPIO        GPIO_NUM_14
-    #define BOOT_BUTTON_GPIO        GPIO_NUM_0
-    #define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
-    #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_38
-    #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_39
+// ===== LED =====
+#define LED_1 GPIO_NUM_10
+#define LED_2 GPIO_NUM_11
 
-    #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_12
-    #define DISPLAY_MOSI_PIN      GPIO_NUM_8
-    #define DISPLAY_CLK_PIN       GPIO_NUM_9
-    #define DISPLAY_DC_PIN        GPIO_NUM_13
-    #define DISPLAY_RST_PIN       GPIO_NUM_14
-    #define DISPLAY_CS_PIN        GPIO_NUM_15
+// ===== MICROSD (SPI) =====
+#define SD_SPI_MISO_PIN GPIO_NUM_12
+#define SD_SPI_MOSI_PIN GPIO_NUM_13
+#define SD_SPI_SCK_PIN  GPIO_NUM_14
+#define SD_SPI_CS_PIN   GPIO_NUM_NC   // Bỏ trống
+
+// ===== KHÔNG DÙNG =====
+#define BOOT_BUTTON_GPIO        GPIO_NUM_NC
+#define BUILTIN_LED_GPIO        GPIO_NUM_NC
+#define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
+#define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
+#define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
+#define DISPLAY_BACKLIGHT_PIN   GPIO_NUM_NC
+#define LAMP_GPIO               GPIO_NUM_NC
+#define POWER_CHARGE_DETECT_PIN GPIO_NUM_NC
+
 #endif
-
-#ifdef CONFIG_BOARD_HAVE_MOTOR_CONTROL
-    #define BUILTIN_LED_GPIO        GPIO_NUM_NC
-    #define BOOT_BUTTON_GPIO        GPIO_NUM_0
-    #define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
-    #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
-    #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
-
-    #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_19
-    #define DISPLAY_MOSI_PIN      GPIO_NUM_8
-    #define DISPLAY_CLK_PIN       GPIO_NUM_9
-    #define DISPLAY_DC_PIN        GPIO_NUM_38
-    #define DISPLAY_RST_PIN       GPIO_NUM_39
-    #define DISPLAY_CS_PIN        GPIO_NUM_20
-#endif
-
-// ===== MÀN HÌNH =====
-#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-    #define DISPLAY_SDA_PIN GPIO_NUM_8
-    #define DISPLAY_SCL_PIN GPIO_NUM_9
-    #define DISPLAY_WIDTH   128
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y true
-
-    #if CONFIG_OLED_SSD1306_128X32
-    #define DISPLAY_HEIGHT  32
-    #elif CONFIG_OLED_SSD1306_128X64
-    #define DISPLAY_HEIGHT  64
-    #elif CONFIG_OLED_SH1106_128X64
-    #define DISPLAY_HEIGHT  64
-    #define SH1106
-    #else
-    #error "OLED display type is not selected"
-    #endif
-
-#elif CONFIG_WK_ESP32S3_DEV_DISPLAY_LCD
-    #ifdef CONFIG_LCD_ST7789_240X320
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_240X320_NO_IPS
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    false
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_170X320
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   170
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  35
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_172X320
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   172
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  34
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_240X280
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  280
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  20
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_240X240
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  240
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_240X240_7PIN
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  240
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 3
-    #endif
-
-    #ifdef CONFIG_LCD_ST7789_240X135
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  135
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY true
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  40
-    #define DISPLAY_OFFSET_Y  53
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7735_128X160
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   128
-    #define DISPLAY_HEIGHT  160
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y true
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    false
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7735_128X128
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   128
-    #define DISPLAY_HEIGHT  128
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y true
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR  false
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  32
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7796_320X480
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   320
-    #define DISPLAY_HEIGHT  480
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ST7796_320X480_NO_IPS
-    #define LCD_TYPE_ST7789_SERIAL
-    #define DISPLAY_WIDTH   320
-    #define DISPLAY_HEIGHT  480
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    false
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ILI9341_240X320
-    #define LCD_TYPE_ILI9341_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ILI9341_240X320_NO_IPS
-    #define LCD_TYPE_ILI9341_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    false
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_GC9A01_240X240
-    #define LCD_TYPE_GC9A01_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  240
-    #define DISPLAY_MIRROR_X true
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_NV3030B_240X320
-    #define LCD_TYPE_NV3030B_SERIAL
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  -20
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_ILI9486_320X480
-    #define LCD_TYPE_ILI9486_SERIAL
-    #define DISPLAY_WIDTH   320
-    #define DISPLAY_HEIGHT  480
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_BGR
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  -20
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-
-    #ifdef CONFIG_LCD_CUSTOM
-    #define DISPLAY_WIDTH   240
-    #define DISPLAY_HEIGHT  320
-    #define DISPLAY_MIRROR_X false
-    #define DISPLAY_MIRROR_Y false
-    #define DISPLAY_SWAP_XY false
-    #define DISPLAY_INVERT_COLOR    true
-    #define DISPLAY_RGB_ORDER  LCD_RGB_ELEMENT_ORDER_RGB
-    #define DISPLAY_OFFSET_X  0
-    #define DISPLAY_OFFSET_Y  0
-    #define DISPLAY_BACKLIGHT_OUTPUT_INVERT false
-    #define DISPLAY_SPI_MODE 0
-    #endif
-#endif
-
-// ===== LAMP =====
-#define LAMP_GPIO GPIO_NUM_15
-
-#endif // _BOARD_CONFIG_H_
