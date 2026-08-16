@@ -7,7 +7,6 @@
 #include "button.h"
 #include "config.h"
 #include "mcp_server.h"
-#include "lamp_controller.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
 #include <wifi_station.h>
@@ -88,6 +87,9 @@ private:
             .pin_bit_mask = (1ULL << DRV8833_IN1) | (1ULL << DRV8833_IN2) | 
                             (1ULL << DRV8833_IN3) | (1ULL << DRV8833_IN4),
             .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
         
@@ -103,13 +105,18 @@ private:
         gpio_config_t io_conf = {
             .pin_bit_mask = 1ULL << PIR_MOTION_SENSOR_PIN,
             .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
     }
 
     // ===== CẢM BIẾN KHOẢNG CÁCH I2C =====
     void InitializeUltrasonic() {
-        // I2C: SCL=GPIO39, SDA=GPIO40
+        // SCL=GPIO39, SDA=GPIO40
+        // I2C bus sẽ được khởi tạo riêng cho cảm biến khoảng cách
+        ESP_LOGI(TAG, "Initialize Ultrasonic Sensor (I2C: SCL=39, SDA=40)");
     }
 
     // ===== LED GPIO =====
@@ -117,6 +124,9 @@ private:
         gpio_config_t io_conf = {
             .pin_bit_mask = (1ULL << LED_1) | (1ULL << LED_2),
             .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
         gpio_set_level(LED_1, 0);
@@ -187,6 +197,52 @@ private:
                 gpio_set_level(DRV8833_IN4, 0);
                 return "Đã dừng động cơ";
             });
+            
+        // Tiến
+        mcp.AddTool("self.motor.forward", "Robot tiến về phía trước",
+            PropertyList({Property("speed", kPropertyTypeInteger, 128, 0, 255)}),
+            [](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                gpio_set_level(DRV8833_IN1, 1);
+                gpio_set_level(DRV8833_IN2, 0);
+                gpio_set_level(DRV8833_IN3, 1);
+                gpio_set_level(DRV8833_IN4, 0);
+                return "Robot đang tiến";
+            });
+            
+        // Lùi
+        mcp.AddTool("self.motor.backward", "Robot lùi về phía sau",
+            PropertyList({Property("speed", kPropertyTypeInteger, 128, 0, 255)}),
+            [](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                gpio_set_level(DRV8833_IN1, 0);
+                gpio_set_level(DRV8833_IN2, 1);
+                gpio_set_level(DRV8833_IN3, 0);
+                gpio_set_level(DRV8833_IN4, 1);
+                return "Robot đang lùi";
+            });
+            
+        // Rẽ trái
+        mcp.AddTool("self.motor.turn_left", "Robot rẽ trái",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 0);
+                gpio_set_level(DRV8833_IN2, 1);  // Motor trái quay ngược
+                gpio_set_level(DRV8833_IN3, 1);
+                gpio_set_level(DRV8833_IN4, 0);  // Motor phải quay thuận
+                return "Robot đang rẽ trái";
+            });
+            
+        // Rẽ phải
+        mcp.AddTool("self.motor.turn_right", "Robot rẽ phải",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 1);
+                gpio_set_level(DRV8833_IN2, 0);  // Motor trái quay thuận
+                gpio_set_level(DRV8833_IN3, 0);
+                gpio_set_level(DRV8833_IN4, 1);  // Motor phải quay ngược
+                return "Robot đang rẽ phải";
+            });
     }
 
     // ===== MCP: LED =====
@@ -214,6 +270,29 @@ private:
                 state = !state;
                 gpio_set_level(LED_1, state ? 1 : 0);
                 return state ? "LED 1 đang bật" : "LED 1 đang tắt";
+            });
+            
+        mcp.AddTool("self.led2.on", "Bật đèn LED 2",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(LED_2, 1);
+                return "Đã bật LED 2";
+            });
+            
+        mcp.AddTool("self.led2.off", "Tắt đèn LED 2",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(LED_2, 0);
+                return "Đã tắt LED 2";
+            });
+            
+        mcp.AddTool("self.led2.toggle", "Bật/tắt LED 2",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                static bool state = false;
+                state = !state;
+                gpio_set_level(LED_2, state ? 1 : 0);
+                return state ? "LED 2 đang bật" : "LED 2 đang tắt";
             });
     }
 
@@ -243,8 +322,10 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
+#ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
         InitializeMotorMcp();
+#endif
 
         InitializePirSensor();
         InitializeUltrasonic();
