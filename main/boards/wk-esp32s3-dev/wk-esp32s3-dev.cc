@@ -20,9 +20,10 @@
 #include <driver/ledc.h>
 #include <driver/gpio.h>
 #include <esp_rom_sys.h>
-#include <esp_adc/adc_oneshot.h>   // ← SỬA: dùng adc_oneshot
+#include <esp_adc/adc_oneshot.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <math.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -32,6 +33,27 @@ class WkEsp32s3Dev;
 class SensorController {
 public:
     SensorController(WkEsp32s3Dev* board);
+};
+
+// ===== LED PATTERNS =====
+enum LedPattern {
+    PATTERN_OFF = 0,
+    PATTERN_BREATH,
+    PATTERN_BLINK_FAST,
+    PATTERN_BLINK_SLOW,
+    PATTERN_HEARTBEAT,
+    PATTERN_WAVE,
+    PATTERN_COMET,
+    PATTERN_PULSE,
+    PATTERN_TWINKLE,
+};
+
+struct LedAnimation {
+    LedPattern pattern;
+    int speed;
+    int brightness;
+    uint32_t start_time;
+    bool active;
 };
 
 class WkEsp32s3Dev : public WifiBoard {
@@ -44,38 +66,175 @@ private:
     Button volume_up_button_;
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
-    adc_oneshot_unit_handle_t adc_handle_ = nullptr;  // ← SỬA: dùng adc_oneshot_unit_handle_t
+    adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+
+    // LED animation variables
+    LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
+    LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
+    uint32_t led_tick_ = 0;
 
     friend class SensorController;
 
-    // ===== LED TRẠNG THÁI =====
-    void UpdateLedByState() {
-        auto& app = Application::GetInstance();
-        auto state = app.GetDeviceState();
-        
-        switch (state) {
-            case kDeviceStateListening:
-                gpio_set_level(LED_1, 1);
-                gpio_set_level(LED_2, 0);
-                break;
-            case kDeviceStateSpeaking:
-                gpio_set_level(LED_1, 0);
-                gpio_set_level(LED_2, 1);
-                break;
-            case kDeviceStateIdle:
-                gpio_set_level(LED_1, 0);
-                gpio_set_level(LED_2, 0);
-                break;
-            default:
-                break;
+    // ===== LED EFFECT FUNCTIONS =====
+    int BreathEffect(uint32_t time_ms, int speed) {
+        float period = 2000.0f / speed;
+        float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
+        return (int)((sin(phase) + 1) / 2 * 255);
+    }
+
+    int HeartbeatEffect(uint32_t time_ms) {
+        uint32_t cycle = time_ms % 1000;
+        if (cycle < 100) return 255;
+        else if (cycle < 200) return 50;
+        else if (cycle < 300) return 255;
+        else if (cycle < 400) return 50;
+        else return 0;
+    }
+
+    int WaveEffect(uint32_t time_ms, int speed, int led_index) {
+        float period = 1500.0f / speed;
+        float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
+        float phase_offset = led_index == 0 ? 0 : 3.14159f;
+        return (int)((sin(phase + phase_offset) + 1) / 2 * 255);
+    }
+
+    int CometEffect(uint32_t time_ms, int speed, int led_index) {
+        int cycle_time = 3000 / speed;
+        int pos = (time_ms % cycle_time) * 255 / cycle_time;
+        int brightness = 0;
+        if (pos > 200) brightness = 255;
+        else if (pos > 150) brightness = (pos - 150) * 5;
+        return led_index == 0 ? brightness : brightness / 2;
+    }
+
+    int TwinkleEffect(uint32_t time_ms, int speed, int led_index) {
+        uint32_t seed = (time_ms / (200 / speed)) + led_index * 1000;
+        uint32_t random = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return (random % 256) > 200 ? 255 : (random % 256) > 100 ? 128 : 0;
+    }
+
+    int PulseEffect(uint32_t time_ms, int speed, int led_index) {
+        int pulse_width = 200 / speed;
+        uint32_t cycle = time_ms % (pulse_width * 4);
+        if (cycle < pulse_width) {
+            return (cycle * 255) / pulse_width;
+        } else if (cycle < pulse_width * 2) {
+            return 255 - ((cycle - pulse_width) * 255 / pulse_width);
+        } else {
+            return 0;
         }
     }
 
-    static void LedStateTask(void* arg) {
+    void ApplyLedEffect(int led_pin, LedAnimation anim) {
+        if (!anim.active) return;
+        
+        int brightness = 0;
+        uint32_t time = led_tick_;
+        
+        switch (anim.pattern) {
+            case PATTERN_OFF:
+                brightness = 0;
+                break;
+            case PATTERN_BREATH:
+                brightness = BreathEffect(time, anim.speed);
+                break;
+            case PATTERN_BLINK_FAST:
+                brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0;
+                break;
+            case PATTERN_BLINK_SLOW:
+                brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0;
+                break;
+            case PATTERN_HEARTBEAT:
+                brightness = HeartbeatEffect(time);
+                break;
+            case PATTERN_WAVE:
+                brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            case PATTERN_COMET:
+                brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            case PATTERN_PULSE:
+                brightness = PulseEffect(time, anim.speed, 0);
+                break;
+            case PATTERN_TWINKLE:
+                brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            default:
+                brightness = 0;
+                break;
+        }
+        
+        if (brightness > 200) {
+            gpio_set_level((gpio_num_t)led_pin, 1);
+        } else if (brightness > 50) {
+            gpio_set_level((gpio_num_t)led_pin, 1);
+        } else {
+            gpio_set_level((gpio_num_t)led_pin, 0);
+        }
+    }
+
+    void UpdateLedCreative() {
+        auto& app = Application::GetInstance();
+        auto state = app.GetDeviceState();
+        led_tick_ += 50;
+        
+        switch (state) {
+            case kDeviceStateIdle:
+                // 🌙 IDLE: LED 1 thở chậm, LED 2 tắt
+                anim_led1_.pattern = PATTERN_BREATH;
+                anim_led1_.speed = 3;
+                anim_led2_.pattern = PATTERN_OFF;
+                break;
+            case kDeviceStateConnecting:
+                // 📡 CONNECTING: cả 2 LED xung nhịp
+                anim_led1_.pattern = PATTERN_PULSE;
+                anim_led1_.speed = 8;
+                anim_led2_.pattern = PATTERN_PULSE;
+                anim_led2_.speed = 8;
+                break;
+            case kDeviceStateListening:
+                // 🎤 LISTENING: LED 1 nhấp nháy nhanh, LED 2 sóng
+                anim_led1_.pattern = PATTERN_BLINK_FAST;
+                anim_led1_.speed = 10;
+                anim_led2_.pattern = PATTERN_WAVE;
+                anim_led2_.speed = 7;
+                break;
+            case kDeviceStateSpeaking:
+                // 💬 SPEAKING: LED 1 nhịp tim, LED 2 thở
+                anim_led1_.pattern = PATTERN_HEARTBEAT;
+                anim_led1_.speed = 5;
+                anim_led2_.pattern = PATTERN_BREATH;
+                anim_led2_.speed = 4;
+                break;
+            case kDeviceStateWakeWordDetected:
+                // ⚡ WAKE WORD: LED 1 sao băng, LED 2 lấp lánh
+                anim_led1_.pattern = PATTERN_COMET;
+                anim_led1_.speed = 10;
+                anim_led2_.pattern = PATTERN_TWINKLE;
+                anim_led2_.speed = 8;
+                break;
+            case kDeviceStateError:
+                // ❌ ERROR: cả 2 LED nhấp nháy nhanh
+                anim_led1_.pattern = PATTERN_BLINK_FAST;
+                anim_led1_.speed = 12;
+                anim_led2_.pattern = PATTERN_BLINK_FAST;
+                anim_led2_.speed = 12;
+                break;
+            default:
+                anim_led1_.pattern = PATTERN_OFF;
+                anim_led2_.pattern = PATTERN_OFF;
+                break;
+        }
+        
+        ApplyLedEffect(LED_1, anim_led1_);
+        ApplyLedEffect(LED_2, anim_led2_);
+    }
+
+    static void LedCreativeTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (1) {
-            board->UpdateLedByState();
-            vTaskDelay(pdMS_TO_TICKS(200));
+            board->UpdateLedCreative();
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
 
@@ -130,7 +289,7 @@ private:
         gpio_set_level(LED_2, 0);
     }
 
-    // ===== ADC (PIN) - SỬA DÙNG ADC ONESHOT =====
+    // ===== ADC (PIN) =====
     void InitializeAdc() {
         adc_oneshot_unit_init_cfg_t init_config = {
             .unit_id = POWER_ADC_UNIT,
@@ -324,7 +483,10 @@ public:
         InitializeAdc();
         InitializeBatteryMcp();
 
-        xTaskCreate(LedStateTask, "led_state", 2048, this, 5, nullptr);
+        // Start creative LED task (replaces old LedStateTask)
+        anim_led1_.active = true;
+        anim_led2_.active = true;
+        xTaskCreate(LedCreativeTask, "led_creative", 4096, this, 5, nullptr);
 
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
@@ -393,7 +555,7 @@ public:
     }
 
     void InitializeTools() {
-        // Giữ nguyên tools
+        // Keep tools
     }
 
     virtual Led* GetLed() override {
