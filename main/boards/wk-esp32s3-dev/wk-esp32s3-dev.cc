@@ -20,7 +20,7 @@
 #include <driver/ledc.h>
 #include <driver/gpio.h>
 #include <esp_rom_sys.h>
-#include <esp_adc/adc_oneshot.h>
+#include <esp_adc/adc_oneshot.h>   // ← SỬA: dùng adc_oneshot
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -44,7 +44,7 @@ private:
     Button volume_up_button_;
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
-    adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+    adc_oneshot_unit_handle_t adc_handle_ = nullptr;  // ← SỬA: dùng adc_oneshot_unit_handle_t
 
     friend class SensorController;
 
@@ -93,7 +93,6 @@ private:
         };
         gpio_config(&io_conf);
         
-        // Dừng động cơ ban đầu
         gpio_set_level(DRV8833_IN1, 0);
         gpio_set_level(DRV8833_IN2, 0);
         gpio_set_level(DRV8833_IN3, 0);
@@ -114,7 +113,6 @@ private:
 
     // ===== CẢM BIẾN KHOẢNG CÁCH I2C =====
     void InitializeUltrasonic() {
-        // SCL=GPIO39, SDA=GPIO40
         ESP_LOGI(TAG, "Initialize Ultrasonic Sensor (I2C: SCL=39, SDA=40)");
     }
 
@@ -132,25 +130,25 @@ private:
         gpio_set_level(LED_2, 0);
     }
 
-    // ===== ADC (PIN) =====
+    // ===== ADC (PIN) - SỬA DÙNG ADC ONESHOT =====
     void InitializeAdc() {
         adc_oneshot_unit_init_cfg_t init_config = {
             .unit_id = POWER_ADC_UNIT,
+            .ulp_mode = ADC_ULP_MODE_DISABLE,
         };
-        adc_oneshot_new_unit(&init_config, &adc_handle_);
+        ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle_));
 
         adc_oneshot_chan_cfg_t config = {
             .atten = ADC_ATTEN_DB_12,
             .bitwidth = ADC_BITWIDTH_12,
         };
-        adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config);
+        ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
     }
 
     // ===== MCP: ĐỘNG CƠ =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         
-        // Điều khiển động cơ trái
         mcp.AddTool("self.motor.left", "Điều khiển động cơ trái",
             PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
             [](const PropertyList& p) -> ReturnValue {
@@ -168,7 +166,6 @@ private:
                 return true;
             });
             
-        // Điều khiển động cơ phải
         mcp.AddTool("self.motor.right", "Điều khiển động cơ phải",
             PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
             [](const PropertyList& p) -> ReturnValue {
@@ -186,7 +183,6 @@ private:
                 return true;
             });
             
-        // Dừng cả 2 động cơ
         mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
@@ -197,7 +193,6 @@ private:
                 return "Đã dừng động cơ";
             });
             
-        // Tiến
         mcp.AddTool("self.motor.forward", "Robot tiến về phía trước",
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
@@ -208,7 +203,6 @@ private:
                 return "Robot đang tiến";
             });
             
-        // Lùi
         mcp.AddTool("self.motor.backward", "Robot lùi về phía sau",
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
@@ -219,7 +213,6 @@ private:
                 return "Robot đang lùi";
             });
             
-        // Rẽ trái
         mcp.AddTool("self.motor.turn_left", "Robot rẽ trái",
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
@@ -230,7 +223,6 @@ private:
                 return "Robot đang rẽ trái";
             });
             
-        // Rẽ phải
         mcp.AddTool("self.motor.turn_right", "Robot rẽ phải",
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
@@ -332,7 +324,6 @@ public:
         InitializeAdc();
         InitializeBatteryMcp();
 
-        // ===== TASK LED TRẠNG THÁI =====
         xTaskCreate(LedStateTask, "led_state", 2048, this, 5, nullptr);
 
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
@@ -344,12 +335,10 @@ public:
         InitializeTools();
     }
 
-    // ===== ĐỌC CẢM BIẾN =====
     bool ReadMotionDetected() {
         return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
     }
 
-    // ===== OLED I2C =====
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
     void InitializeDisplayI2c() {
         i2c_master_bus_config_t bus_config = {
