@@ -23,9 +23,9 @@
     #define AUDIO_I2S_GPIO_DOUT GPIO_NUM_7
 #endif
 
-// ===== MOTOR (2 SERVO) =====
-#define SERVO_1_PIN  GPIO_NUM_5
-#define SERVO_2_PIN  GPIO_NUM_4
+// ===== MOTOR (2 SERVO) - KHÔNG XUNG ĐỘT =====
+#define SERVO_1_PIN  GPIO_NUM_10
+#define SERVO_2_PIN  GPIO_NUM_11
 
 // ===== CẢM BIẾN =====
 #define PIR_MOTION_SENSOR_PIN  GPIO_NUM_3
@@ -33,7 +33,7 @@
 #define ULTRASONIC_ECHO_PIN    GPIO_NUM_17
 
 // ===== MẠCH SẠC PIN =====
-#define POWER_CHARGE_DETECT_PIN GPIO_NUM_14
+#define POWER_CHARGE_DETECT_PIN GPIO_NUM_16
 #define POWER_ADC_UNIT          ADC_UNIT_1
 #define POWER_ADC_CHANNEL       ADC_CHANNEL_2
 
@@ -45,12 +45,12 @@
     #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_38
     #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_39
 
-    #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_10
+    #define DISPLAY_BACKLIGHT_PIN GPIO_NUM_12
     #define DISPLAY_MOSI_PIN      GPIO_NUM_8
     #define DISPLAY_CLK_PIN       GPIO_NUM_9
-    #define DISPLAY_DC_PIN        GPIO_NUM_12
-    #define DISPLAY_RST_PIN       GPIO_NUM_13
-    #define DISPLAY_CS_PIN        GPIO_NUM_11
+    #define DISPLAY_DC_PIN        GPIO_NUM_13
+    #define DISPLAY_RST_PIN       GPIO_NUM_14
+    #define DISPLAY_CS_PIN        GPIO_NUM_15
 #endif
 
 #ifdef CONFIG_BOARD_HAVE_MOTOR_CONTROL
