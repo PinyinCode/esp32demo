@@ -2,7 +2,7 @@
 #define _BOARD_CONFIG_H_
 
 #include <driver/gpio.h>
-#include <driver/adc.h>
+#include <esp_adc/adc_oneshot.h>
 
 // ===== CẤU HÌNH ÂM THANH =====
 #define AUDIO_INPUT_SAMPLE_RATE  16000
