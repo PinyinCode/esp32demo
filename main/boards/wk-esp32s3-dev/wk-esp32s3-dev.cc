@@ -115,7 +115,6 @@ private:
     // ===== CẢM BIẾN KHOẢNG CÁCH I2C =====
     void InitializeUltrasonic() {
         // SCL=GPIO39, SDA=GPIO40
-        // I2C bus sẽ được khởi tạo riêng cho cảm biến khoảng cách
         ESP_LOGI(TAG, "Initialize Ultrasonic Sensor (I2C: SCL=39, SDA=40)");
     }
 
@@ -200,9 +199,8 @@ private:
             
         // Tiến
         mcp.AddTool("self.motor.forward", "Robot tiến về phía trước",
-            PropertyList({Property("speed", kPropertyTypeInteger, 128, 0, 255)}),
+            PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
                 gpio_set_level(DRV8833_IN1, 1);
                 gpio_set_level(DRV8833_IN2, 0);
                 gpio_set_level(DRV8833_IN3, 1);
@@ -212,9 +210,8 @@ private:
             
         // Lùi
         mcp.AddTool("self.motor.backward", "Robot lùi về phía sau",
-            PropertyList({Property("speed", kPropertyTypeInteger, 128, 0, 255)}),
+            PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
                 gpio_set_level(DRV8833_IN1, 0);
                 gpio_set_level(DRV8833_IN2, 1);
                 gpio_set_level(DRV8833_IN3, 0);
@@ -227,9 +224,9 @@ private:
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
                 gpio_set_level(DRV8833_IN1, 0);
-                gpio_set_level(DRV8833_IN2, 1);  // Motor trái quay ngược
+                gpio_set_level(DRV8833_IN2, 1);
                 gpio_set_level(DRV8833_IN3, 1);
-                gpio_set_level(DRV8833_IN4, 0);  // Motor phải quay thuận
+                gpio_set_level(DRV8833_IN4, 0);
                 return "Robot đang rẽ trái";
             });
             
@@ -238,9 +235,9 @@ private:
             PropertyList(),
             [](const PropertyList& p) -> ReturnValue {
                 gpio_set_level(DRV8833_IN1, 1);
-                gpio_set_level(DRV8833_IN2, 0);  // Motor trái quay thuận
+                gpio_set_level(DRV8833_IN2, 0);
                 gpio_set_level(DRV8833_IN3, 0);
-                gpio_set_level(DRV8833_IN4, 1);  // Motor phải quay ngược
+                gpio_set_level(DRV8833_IN4, 1);
                 return "Robot đang rẽ phải";
             });
     }
