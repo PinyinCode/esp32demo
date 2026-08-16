@@ -174,62 +174,62 @@ private:
     }
 
     void UpdateLedCreative() {
-        auto& app = Application::GetInstance();
-        auto state = app.GetDeviceState();
-        led_tick_ += 50;
-        
-        switch (state) {
-            case kDeviceStateIdle:
-                // 🌙 IDLE: LED 1 thở chậm, LED 2 tắt
-                anim_led1_.pattern = PATTERN_BREATH;
-                anim_led1_.speed = 3;
-                anim_led2_.pattern = PATTERN_OFF;
-                break;
-            case kDeviceStateConnecting:
-                // 📡 CONNECTING: cả 2 LED xung nhịp
-                anim_led1_.pattern = PATTERN_PULSE;
-                anim_led1_.speed = 8;
-                anim_led2_.pattern = PATTERN_PULSE;
-                anim_led2_.speed = 8;
-                break;
-            case kDeviceStateListening:
-                // 🎤 LISTENING: LED 1 nhấp nháy nhanh, LED 2 sóng
-                anim_led1_.pattern = PATTERN_BLINK_FAST;
-                anim_led1_.speed = 10;
-                anim_led2_.pattern = PATTERN_WAVE;
-                anim_led2_.speed = 7;
-                break;
-            case kDeviceStateSpeaking:
-                // 💬 SPEAKING: LED 1 nhịp tim, LED 2 thở
-                anim_led1_.pattern = PATTERN_HEARTBEAT;
-                anim_led1_.speed = 5;
-                anim_led2_.pattern = PATTERN_BREATH;
-                anim_led2_.speed = 4;
-                break;
-            case kDeviceStateWakeWordDetected:
-                // ⚡ WAKE WORD: LED 1 sao băng, LED 2 lấp lánh
-                anim_led1_.pattern = PATTERN_COMET;
-                anim_led1_.speed = 10;
-                anim_led2_.pattern = PATTERN_TWINKLE;
-                anim_led2_.speed = 8;
-                break;
-            case kDeviceStateError:
-                // ❌ ERROR: cả 2 LED nhấp nháy nhanh
-                anim_led1_.pattern = PATTERN_BLINK_FAST;
-                anim_led1_.speed = 12;
-                anim_led2_.pattern = PATTERN_BLINK_FAST;
-                anim_led2_.speed = 12;
-                break;
-            default:
-                anim_led1_.pattern = PATTERN_OFF;
-                anim_led2_.pattern = PATTERN_OFF;
-                break;
-        }
-        
-        ApplyLedEffect(LED_1, anim_led1_);
-        ApplyLedEffect(LED_2, anim_led2_);
+    auto& app = Application::GetInstance();
+    auto state = app.GetDeviceState();
+    led_tick_ += 50;
+    
+    switch (state) {
+        case kDeviceStateIdle:
+            // 🌙 IDLE: LED 1 thở chậm, LED 2 tắt
+            anim_led1_.pattern = PATTERN_BREATH;
+            anim_led1_.speed = 3;
+            anim_led2_.pattern = PATTERN_OFF;
+            break;
+            
+        case kDeviceStateConnecting:
+            // 📡 CONNECTING: cả 2 LED xung nhịp
+            anim_led1_.pattern = PATTERN_PULSE;
+            anim_led1_.speed = 8;
+            anim_led2_.pattern = PATTERN_PULSE;
+            anim_led2_.speed = 8;
+            break;
+            
+        case kDeviceStateListening:
+            // 🎤 LISTENING: LED 1 nhấp nháy nhanh, LED 2 sóng
+            anim_led1_.pattern = PATTERN_BLINK_FAST;
+            anim_led1_.speed = 10;
+            anim_led2_.pattern = PATTERN_WAVE;
+            anim_led2_.speed = 7;
+            break;
+            
+        case kDeviceStateSpeaking:
+            // 💬 SPEAKING: LED 1 nhịp tim, LED 2 thở
+            anim_led1_.pattern = PATTERN_HEARTBEAT;
+            anim_led1_.speed = 5;
+            anim_led2_.pattern = PATTERN_BREATH;
+            anim_led2_.speed = 4;
+            break;
+            
+        case kDeviceStateStarting:
+            // 🚀 STARTING: LED 1 + LED 2 nhấp nháy chậm
+            anim_led1_.pattern = PATTERN_BLINK_SLOW;
+            anim_led1_.speed = 5;
+            anim_led2_.pattern = PATTERN_BLINK_SLOW;
+            anim_led2_.speed = 5;
+            break;
+            
+        default:
+            // ❌ UNKNOWN: cả 2 LED nhấp nháy nhanh (báo lỗi)
+            anim_led1_.pattern = PATTERN_BLINK_FAST;
+            anim_led1_.speed = 12;
+            anim_led2_.pattern = PATTERN_BLINK_FAST;
+            anim_led2_.speed = 12;
+            break;
     }
-
+    
+    ApplyLedEffect(LED_1, anim_led1_);
+    ApplyLedEffect(LED_2, anim_led2_);
+}
     static void LedCreativeTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (1) {
