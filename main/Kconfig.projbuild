@@ -121,7 +121,6 @@ endchoice
 
 choice BOARD_TYPE
     prompt "Target Board"
-    default BOARD_TYPE_XIAOZHI_ROBOT if IDF_TARGET_ESP32S3
     default BOARD_TYPE_WK_ESP32S3_DEV if IDF_TARGET_ESP32S3
     default BOARD_TYPE_BREAD_COMPACT_ESP32 if IDF_TARGET_ESP32
     default BOARD_TYPE_XMINI_C3_V3 if IDF_TARGET_ESP32C3
@@ -132,11 +131,6 @@ choice BOARD_TYPE
     help
         Select the physical board hardware implementation.
         The OTA board type and firmware variant name are configured separately.
-
-    # ===== BOARD XIAOZHI ROBOT =====
-    config BOARD_TYPE_XIAOZHI_ROBOT
-        bool "Xiaozhi Robot (DRV8833 + INMP441 + MAX98357A)"
-        depends on IDF_TARGET_ESP32S3
 
     config BOARD_TYPE_ATK_DNESP32S3
         bool "Alientek ATK-DNESP32S3 Development Board (正点原子)"
@@ -698,36 +692,7 @@ choice ESP32_S3_LCD_EV_BOARD_VERSION
         bool "Espressif ESP32-S3-LCD-EV-Board-MB v1.5"
 endchoice
 
-# ===== CẤU HÌNH CHO BOARD XIAOZHI ROBOT =====
-choice XIAOZHI_ROBOT_DISPLAY_TYPE
-    depends on BOARD_TYPE_XIAOZHI_ROBOT
-    prompt "Xiaozhi Robot Display Type"
-    default XIAOZHI_ROBOT_DISPLAY_OLED
-    help
-        Select display type for Xiaozhi Robot
 
-    config XIAOZHI_ROBOT_DISPLAY_OLED
-        bool "OLED SSD1306 (I2C)"
-    config XIAOZHI_ROBOT_DISPLAY_LCD
-        bool "LCD (SPI)"
-endchoice
-
-choice XIAOZHI_ROBOT_OLED_TYPE
-    depends on BOARD_TYPE_XIAOZHI_ROBOT && XIAOZHI_ROBOT_DISPLAY_OLED
-    prompt "OLED Type"
-    default XIAOZHI_ROBOT_OLED_128X64
-    help
-        OLED Monochrome Display Type
-
-    config XIAOZHI_ROBOT_OLED_128X32
-        bool "SSD1306 128x32"
-    config XIAOZHI_ROBOT_OLED_128X64
-        bool "SSD1306 128x64"
-    config XIAOZHI_ROBOT_OLED_SH1106
-        bool "SH1106 128x64"
-endchoice
-
-# ===== CẤU HÌNH CHO WK ESP32S3 DEV =====
 choice WK_ESP32S3_DEV_DISPLAY_TYPE
     depends on BOARD_TYPE_WK_ESP32S3_DEV
     prompt "WK ESP32S3 DEV Display Type"
@@ -743,9 +708,8 @@ choice WK_ESP32S3_DEV_DISPLAY_TYPE
 
 endchoice
 
-# ===== OLED TYPE =====
 choice DISPLAY_OLED_TYPE
-    depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_NT26 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_HU_087 || (BOARD_TYPE_WK_ESP32S3_DEV && WK_ESP32S3_DEV_DISPLAY_OLED) || BOARD_TYPE_XIAOZHI_ROBOT
+    depends on BOARD_TYPE_BREAD_COMPACT_WIFI || BOARD_TYPE_BREAD_COMPACT_ML307 || BOARD_TYPE_BREAD_COMPACT_NT26 || BOARD_TYPE_BREAD_COMPACT_ESP32 || BOARD_TYPE_HU_087 || (BOARD_TYPE_WK_ESP32S3_DEV && WK_ESP32S3_DEV_DISPLAY_OLED)
     prompt "OLED Type"
     default OLED_SSD1306_128X64
     help
@@ -758,9 +722,9 @@ choice DISPLAY_OLED_TYPE
         bool "SH1106 128*64"
 endchoice
 
-# ===== LCD TYPE =====
+
 choice DISPLAY_LCD_TYPE
-    depends on BOARD_TYPE_BREAD_COMPACT_WIFI_LCD || BOARD_TYPE_BREAD_COMPACT_ESP32_LCD || BOARD_TYPE_WDMOMO_CGC || BOARD_TYPE_BREAD_COMPACT_WIFI_CAM || (BOARD_TYPE_WK_ESP32S3_DEV && WK_ESP32S3_DEV_DISPLAY_LCD) || (BOARD_TYPE_XIAOZHI_ROBOT && XIAOZHI_ROBOT_DISPLAY_LCD)
+    depends on BOARD_TYPE_BREAD_COMPACT_WIFI_LCD || BOARD_TYPE_BREAD_COMPACT_ESP32_LCD || BOARD_TYPE_WDMOMO_CGC || BOARD_TYPE_BREAD_COMPACT_WIFI_CAM || (BOARD_TYPE_WK_ESP32S3_DEV && WK_ESP32S3_DEV_DISPLAY_LCD)
     prompt "LCD Type"
     default LCD_ST7789_240X320
     help
@@ -803,14 +767,15 @@ endchoice
 
 choice WK_BOARD_TYPE
     depends on BOARD_TYPE_WK_ESP32S3_DEV
-    prompt "BOARD_TYPE_WK_ESP32S3_DEV"
-    default BOARD_HAVE_MOTOR_CONTROL
+    prompt "WK ESP32S3 DEV Board Type"
+    default BOARD_WK_HAVE_MOTOR
     help
-        Board Type
-    config BOARD_HAVE_MOTOR_CONTROL
-        bool "带电机驱动"
-    config BOARD_NO_MOTOR_CONTROL
-        bool "不带电机驱动"    
+        Select board type for WK ESP32S3 DEV
+
+    config BOARD_WK_HAVE_MOTOR
+        bool "Có động cơ (DRV8833 - Robot)"
+    config BOARD_WK_NO_MOTOR
+        bool "Không có động cơ"
 endchoice
 
 
