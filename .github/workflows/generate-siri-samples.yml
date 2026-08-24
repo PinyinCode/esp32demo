@@ -19,22 +19,39 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
-          pip install gTTS pydub
+          pip install edge-tts pydub
 
       - name: Generate Siri samples
         run: |
           python << 'EOF'
-          from gtts import gTTS
+          import asyncio
+          import edge_tts
           from pydub import AudioSegment
           import os
+          import random
 
           os.makedirs('siri_samples', exist_ok=True)
 
-          print('Dang tao 100 mau Siri...')
-          for i in range(100):
-              tts = gTTS(text='Siri', lang='en', slow=False)
+          voices = [
+              'en-US-AriaNeural',
+              'en-US-GuyNeural',
+              'en-US-JennyNeural',
+              'en-US-DavisNeural',
+              'en-GB-SoniaNeural',
+              'en-GB-RyanNeural',
+              'en-AU-NatashaNeural',
+              'en-AU-WilliamNeural',
+          ]
+
+          variations = ["Siri", "Hey Siri", "Siri?", "Hello Siri"]
+
+          async def generate_sample(i):
+              voice = random.choice(voices)
+              text = random.choice(variations)
+              
+              communicate = edge_tts.Communicate(text, voice)
               mp3_file = f'temp_{i}.mp3'
-              tts.save(mp3_file)
+              await communicate.save(mp3_file)
               
               audio = AudioSegment.from_mp3(mp3_file)
               audio = audio.set_frame_rate(16000).set_channels(1)
@@ -45,13 +62,17 @@ jobs:
                   silence = AudioSegment.silent(duration=1500 - len(audio))
                   audio = audio + silence
               
-              wav_file = f'siri_samples/siri_{i:03d}.wav'
-              audio.export(wav_file, format='wav')
+              audio.export(f'siri_samples/siri_{i:03d}.wav', format='wav')
               os.remove(mp3_file)
-              
-              if (i+1) % 20 == 0:
-                  print(f'Da tao {i+1}/100 mau')
 
+          async def main():
+              print('Dang tao 100 mau...')
+              for i in range(100):
+                  await generate_sample(i)
+                  if (i+1) % 20 == 0:
+                      print(f'{i+1}/100')
+
+          asyncio.run(main())
           print('HOAN THANH!')
           EOF
 
