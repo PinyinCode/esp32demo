@@ -21,7 +21,7 @@ jobs:
           sudo apt-get install -y ffmpeg espeak
           pip install gTTS pydub
 
-      - name: Generate Siri samples (Male + Female)
+      - name: Generate Siri samples (Diverse voices)
         run: |
           python << 'EOF'
           import subprocess
@@ -33,52 +33,17 @@ jobs:
           os.makedirs('siri_samples', exist_ok=True)
 
           variations = ["Siri", "Hey Siri", "Siri?", "Hello Siri", "Siri please"]
-          male_variations = ["Siri", "Hey Siri", "Siri", "Hello Siri"]
 
-          def create_female_sample(text, filename):
-              """Giọng nữ - gTTS"""
-              tts = gTTS(text=text, lang='en', slow=random.choice([True, False]))
-              mp3_file = filename.replace('.wav', '.mp3')
-              tts.save(mp3_file)
-              audio = AudioSegment.from_mp3(mp3_file)
-              os.remove(mp3_file)
-              return audio
-
-          def create_male_sample(text, filename):
-              """Giọng nam - espeak"""
-              wav_file = filename
-              subprocess.run([
-                  'espeak', '-v', 'en+m3',  # m3 = giọng nam
-                  '-s', str(random.randint(140, 180)),  # Tốc độ
-                  '-w', wav_file,
-                  text
-              ], capture_output=True)
-              audio = AudioSegment.from_wav(wav_file)
-              return audio
-
-          print('Dang tao 100 mau (50 nam + 50 nu)...')
-          for i in range(100):
-              text = random.choice(variations)
+          def process_audio(audio):
+              """Áp dụng hiệu ứng ngẫu nhiên cho mỗi mẫu"""
+              pitch_factor = random.uniform(0.85, 1.15)
+              new_frame_rate = int(audio.frame_rate * pitch_factor)
+              audio = audio._spawn(audio.raw_data, overrides={
+                  "frame_rate": new_frame_rate
+              }).set_frame_rate(16000)
               
-              if i < 50:
-                  # 50 mẫu GIỌNG NỮ (gTTS)
-                  try:
-                      audio = create_female_sample(text, f'temp_{i}.wav')
-                      gender = "NU"
-                  except Exception as e:
-                      print(f'Loi nu {i}: {e}')
-                      continue
-              else:
-                  # 50 mẫu GIỌNG NAM (espeak)
-                  try:
-                      audio = create_male_sample(text, f'temp_{i}.wav')
-                      gender = "NAM"
-                  except Exception as e:
-                      print(f'Loi nam {i}: {e}')
-                      continue
-              
-              # Chuẩn hóa
-              audio = audio.set_frame_rate(16000).set_channels(1)
+              volume_change = random.randint(-8, 8)
+              audio = audio + volume_change
               
               if len(audio) > 1500:
                   audio = audio[:1500]
@@ -86,10 +51,55 @@ jobs:
                   silence = AudioSegment.silent(duration=1500 - len(audio))
                   audio = audio + silence
               
-              audio.export(f'siri_samples/siri_{i:03d}_{gender}.wav', format='wav')
+              return audio
+
+          print('Dang tao 100 mau da dang...')
+          for i in range(100):
+              text = random.choice(variations)
+              audio = None
+              gender = ""
               
-              if os.path.exists(f'temp_{i}.wav'):
-                  os.remove(f'temp_{i}.wav')
+              if i < 50:
+                  # ===== GIỌNG NỮ (gTTS) =====
+                  try:
+                      tts = gTTS(text=text, lang='en', slow=random.choice([True, False]))
+                      mp3_file = f'temp_{i}.mp3'
+                      tts.save(mp3_file)
+                      audio = AudioSegment.from_mp3(mp3_file)
+                      os.remove(mp3_file)
+                      gender = "NU"
+                  except Exception as e:
+                      print(f'Loi nu {i}: {e}')
+                      continue
+              else:
+                  # ===== GIỌNG NAM (espeak) =====
+                  try:
+                      espeak_voices = ['en+m3', 'en+m4', 'en+m5', 'en+m6', 'en+m7']
+                      voice = random.choice(espeak_voices)
+                      speed = random.randint(130, 200)
+                      
+                      wav_file = f'temp_{i}.wav'
+                      subprocess.run([
+                          'espeak', '-v', voice,
+                          '-s', str(speed),
+                          '-p', str(random.randint(30, 70)),
+                          '-w', wav_file,
+                          text
+                      ], capture_output=True)
+                      
+                      audio = AudioSegment.from_wav(wav_file)
+                      os.remove(wav_file)
+                      gender = "NAM"
+                  except Exception as e:
+                      print(f'Loi nam {i}: {e}')
+                      continue
+              
+              # Xử lý hiệu ứng
+              audio = process_audio(audio)
+              audio = audio.set_frame_rate(16000).set_channels(1)
+              
+              # Lưu
+              audio.export(f'siri_samples/siri_{i:03d}_{gender}.wav', format='wav')
               
               if (i+1) % 20 == 0:
                   print(f'{i+1}/100')
