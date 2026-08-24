@@ -1,0 +1,81 @@
+name: Generate Siri Wake Word Samples
+
+on:
+  workflow_dispatch:
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          pip install gTTS pydub
+
+      - name: Generate Siri samples
+        run: |
+          python -c "
+from gtts import gTTS
+from pydub import AudioSegment
+import os
+
+os.makedirs('siri_samples', exist_ok=True)
+
+print('🔄 Đang tạo 100 mẫu Siri...')
+for i in range(100):
+    tts = gTTS(text='Siri', lang='en', slow=False)
+    mp3_file = f'temp_{i}.mp3'
+    tts.save(mp3_file)
+    
+    audio = AudioSegment.from_mp3(mp3_file)
+    audio = audio.set_frame_rate(16000).set_channels(1)
+    
+    if len(audio) > 1500:
+        audio = audio[:1500]
+    elif len(audio) < 1500:
+        silence = AudioSegment.silent(duration=1500 - len(audio))
+        audio = audio + silence
+    
+    wav_file = f'siri_samples/siri_{i:03d}.wav'
+    audio.export(wav_file, format='wav')
+    os.remove(mp3_file)
+    
+    if (i+1) % 20 == 0:
+        print(f'✅ Đã tạo {i+1}/100 mẫu')
+
+print('🎉 HOÀN THÀNH!')
+          "
+
+      - name: Create ZIP
+        run: |
+          zip -r siri_samples.zip siri_samples/
+
+      - name: Upload samples
+        uses: actions/upload-artifact@v4
+        with:
+          name: siri-wake-word-samples
+          path: |
+            siri_samples.zip
+            siri_samples/
+
+      - name: Show summary
+        run: |
+          echo "=== Thông tin ==="
+          echo "Số file: $(ls siri_samples/ | wc -l)"
+          echo "Kích thước ZIP: $(du -h siri_samples.zip | cut -f1)"
+          echo ""
+          echo "=== Cách dùng ==="
+          echo "1. Tải artifact 'siri-wake-word-samples'"
+          echo "2. Giải nén"
+          echo "3. Upload lên https://lab.espressif.com/wake-word"
+          echo "4. Nhấn Train"
+          echo "5. Tải model .bin về"
