@@ -37,6 +37,23 @@ jobs:
           ls partitions/v2/16m.csv 2>/dev/null || echo "THIẾU partitions!"
           echo "=== locales ==="
           ls main/assets/locales/vi-VN/language.json 2>/dev/null || echo "THIẾU language.json!"
+          echo "=== component manifest ==="
+          ls -la main/idf_component.yml 2>/dev/null || echo "THIẾU idf_component.yml!"
+
+      - name: Fix component manifest
+        shell: bash
+        run: |
+          # Đảm bảo file idf_component.yml tồn tại và đúng định dạng
+          if [ -f main/idf_component.yml ]; then
+            echo "Checking idf_component.yml..."
+            # Xóa BOM nếu có
+            sed -i '1s/^\xEF\xBB\xBF//' main/idf_component.yml 2>/dev/null || true
+            # Kiểm tra có esp-sr không
+            grep -q "esp-sr" main/idf_component.yml && echo "✅ esp-sr found" || echo "⚠️ esp-sr NOT found"
+          else
+            echo "❌ idf_component.yml missing!"
+            exit 1
+          fi
 
       - name: Build firmware
         shell: bash
