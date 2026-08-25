@@ -36,7 +36,7 @@ public:
     SensorController(WkEsp32s3Dev* board);
 };
 
-// ===== SIMPLE AUDIO CODEC =====
+// ===== SIMPLE AUDIO CODEC (tự viết, không phụ thuộc thư viện ngoài) =====
 class SimpleAudioCodec : public AudioCodec {
 public:
     SimpleAudioCodec(int input_sample_rate, int output_sample_rate,
@@ -44,23 +44,26 @@ public:
                      gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din)
         : AudioCodec(input_sample_rate, output_sample_rate) {
         
+        ESP_LOGI("SimpleAudioCodec", "Initializing audio codec");
+        ESP_LOGI("SimpleAudioCodec", "SPK: BCLK=%d, LRCK=%d, DOUT=%d", spk_bclk, spk_lrck, spk_dout);
+        ESP_LOGI("SimpleAudioCodec", "MIC: SCK=%d, WS=%d, DIN=%d", mic_sck, mic_ws, mic_din);
+        
         spk_bclk_ = spk_bclk;
         spk_lrck_ = spk_lrck;
         spk_dout_ = spk_dout;
         mic_sck_ = mic_sck;
         mic_ws_ = mic_ws;
         mic_din_ = mic_din;
-        initialized_ = false;
         
-        ESP_LOGI("SimpleAudioCodec", "Initialized: BCLK=%d, LRCK=%d, DOUT=%d", spk_bclk, spk_lrck, spk_dout);
+        initialized_ = false;
     }
     
     virtual bool Start() override {
         if (initialized_) return true;
         
-        ESP_LOGI("SimpleAudioCodec", "Starting...");
+        ESP_LOGI("SimpleAudioCodec", "Starting audio codec");
         
-        // Cấu hình I2S cho loa
+        // Cấu hình I2S cho loa (MAX98357A)
         i2s_std_config_t spk_config = {
             .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(output_sample_rate_),
             .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -78,7 +81,7 @@ public:
             },
         };
         
-        // Cấu hình I2S cho mic
+        // Cấu hình I2S cho mic (INMP441)
         i2s_std_config_t mic_config = {
             .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(input_sample_rate_),
             .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
@@ -96,45 +99,48 @@ public:
             },
         };
         
-        // Khởi tạo I2S loa
+        // Khởi tạo I2S cho loa
         esp_err_t ret = i2s_channel_alloc_std(&spk_config, &spk_tx_handle_, &spk_rx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Speaker alloc failed: %d", ret);
-            return false;
-        }
-        ret = i2s_channel_enable(spk_tx_handle_);
-        if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Speaker enable failed: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Failed to allocate speaker I2S: %d", ret);
             return false;
         }
         
-        // Khởi tạo I2S mic
-        ret = i2s_channel_alloc_std(&mic_config, &mic_tx_handle_, &mic_rx_handle_);
+        ret = i2s_channel_enable(spk_tx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Mic alloc failed: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Failed to enable speaker I2S: %d", ret);
             return false;
         }
+        
+        // Khởi tạo I2S cho mic
+        ret = i2s_channel_alloc_std(&mic_config, &mic_tx_handle_, &mic_rx_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE("SimpleAudioCodec", "Failed to allocate mic I2S: %d", ret);
+            return false;
+        }
+        
         ret = i2s_channel_enable(mic_rx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Mic enable failed: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Failed to enable mic I2S: %d", ret);
             return false;
         }
         
         initialized_ = true;
-        ESP_LOGI("SimpleAudioCodec", "Started successfully");
+        ESP_LOGI("SimpleAudioCodec", "Audio codec started successfully");
         return true;
     }
     
     virtual bool Stop() override {
         if (!initialized_) return true;
         
-        ESP_LOGI("SimpleAudioCodec", "Stopping...");
+        ESP_LOGI("SimpleAudioCodec", "Stopping audio codec");
         
         if (spk_tx_handle_) {
             i2s_channel_disable(spk_tx_handle_);
             i2s_del_channel(spk_tx_handle_);
             spk_tx_handle_ = nullptr;
         }
+        
         if (mic_rx_handle_) {
             i2s_channel_disable(mic_rx_handle_);
             i2s_del_channel(mic_rx_handle_);
@@ -222,6 +228,7 @@ private:
     SensorController* sensor_controller_ = nullptr;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
 
+    // LED animation variables
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
@@ -317,7 +324,13 @@ private:
                 break;
         }
         
-        gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
+        if (brightness > 200) {
+            gpio_set_level((gpio_num_t)led_pin, 1);
+        } else if (brightness > 50) {
+            gpio_set_level((gpio_num_t)led_pin, 1);
+        } else {
+            gpio_set_level((gpio_num_t)led_pin, 0);
+        }
     }
 
     void UpdateLedCreative() {
@@ -375,9 +388,9 @@ private:
         }
     }
 
-    // ===== ĐỘNG CƠ DRV8833 =====
+    // ===== ĐỘNG CƠ DRV8833 với PWM =====
     void InitializeMotor() {
-        ESP_LOGI(TAG, "Initialize Motor DRV8833");
+        ESP_LOGI(TAG, "Initialize Motor DRV8833 with PWM");
         
         ledc_timer_config_t timer = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -388,33 +401,90 @@ private:
         };
         ledc_timer_config(&timer);
         
-        ledc_channel_config_t channels[4] = {
-            {DRV8833_IN1, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, LEDC_TIMER_0, 0, 0},
-            {DRV8833_IN2, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, LEDC_TIMER_0, 0, 0},
-            {DRV8833_IN3, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, LEDC_TIMER_0, 0, 0},
-            {DRV8833_IN4, LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, LEDC_TIMER_0, 0, 0}
+        ledc_channel_config_t ch1 = {
+            .gpio_num = DRV8833_IN1,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
         };
-        for (auto& ch : channels) ledc_channel_config(&ch);
+        ledc_channel_config(&ch1);
+        
+        ledc_channel_config_t ch2 = {
+            .gpio_num = DRV8833_IN2,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_1,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
+        };
+        ledc_channel_config(&ch2);
+        
+        ledc_channel_config_t ch3 = {
+            .gpio_num = DRV8833_IN3,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_2,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
+        };
+        ledc_channel_config(&ch3);
+        
+        ledc_channel_config_t ch4 = {
+            .gpio_num = DRV8833_IN4,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_3,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
+        };
+        ledc_channel_config(&ch4);
     }
     
     void SetLeftMotor(int speed) {
         speed = std::max(-100, std::min(100, speed));
-        int duty = (abs(speed) * 1023) / 100;
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, speed > 0 ? duty : 0);
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, speed < 0 ? duty : 0);
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+        
+        if (speed > 0) {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, (speed * 1023) / 100);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+        } else if (speed < 0) {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, (-speed * 1023) / 100);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+        } else {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+        }
     }
     
     void SetRightMotor(int speed) {
         speed = std::max(-100, std::min(100, speed));
-        int duty = (abs(speed) * 1023) / 100;
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, speed > 0 ? duty : 0);
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
-        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, speed < 0 ? duty : 0);
-        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+        
+        if (speed > 0) {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, (speed * 1023) / 100);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+        } else if (speed < 0) {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, (-speed * 1023) / 100);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+        } else {
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
+        }
     }
 
+    // ===== PIR =====
     void InitializePirSensor() {
         gpio_config_t io_conf = {
             .pin_bit_mask = 1ULL << PIR_MOTION_SENSOR_PIN,
@@ -426,10 +496,12 @@ private:
         gpio_config(&io_conf);
     }
 
+    // ===== ULTRASONIC =====
     void InitializeUltrasonic() {
         ESP_LOGI(TAG, "Initialize Ultrasonic Sensor");
     }
 
+    // ===== LED GPIO =====
     void InitializeLedGpio() {
         gpio_config_t io_conf = {
             .pin_bit_mask = (1ULL << LED_1) | (1ULL << LED_2),
@@ -443,6 +515,7 @@ private:
         gpio_set_level(LED_2, 0);
     }
 
+    // ===== ADC =====
     void InitializeAdc() {
         adc_oneshot_unit_init_cfg_t init_config = {
             .unit_id = POWER_ADC_UNIT,
@@ -457,10 +530,11 @@ private:
         ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
     }
 
+    // ===== MCP: MOTOR với PWM =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         
-        mcp.AddTool("self.motor.left", "Motor trái (-100->100)",
+        mcp.AddTool("self.motor.left", "Điều khiển động cơ trái (speed: -100 đến 100)",
             PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
@@ -468,7 +542,7 @@ private:
                 return "Motor trái: " + std::to_string(speed) + "%";
             });
             
-        mcp.AddTool("self.motor.right", "Motor phải (-100->100)",
+        mcp.AddTool("self.motor.right", "Điều khiển động cơ phải (speed: -100 đến 100)",
             PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
@@ -476,7 +550,7 @@ private:
                 return "Motor phải: " + std::to_string(speed) + "%";
             });
             
-        mcp.AddTool("self.motor.stop", "Dừng động cơ",
+        mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 SetLeftMotor(0);
@@ -484,43 +558,44 @@ private:
                 return "Đã dừng động cơ";
             });
             
-        mcp.AddTool("self.motor.forward", "Tiến (0-100)",
+        mcp.AddTool("self.motor.forward", "Robot tiến (speed: 0-100)",
             PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(speed);
-                return "Tiến: " + std::to_string(speed) + "%";
+                return "Robot tiến với tốc độ " + std::to_string(speed) + "%";
             });
             
-        mcp.AddTool("self.motor.backward", "Lùi (0-100)",
+        mcp.AddTool("self.motor.backward", "Robot lùi (speed: 0-100)",
             PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = -p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(speed);
-                return "Lùi: " + std::to_string(-speed) + "%";
+                return "Robot lùi với tốc độ " + std::to_string(-speed) + "%";
             });
             
-        mcp.AddTool("self.motor.turn_left", "Rẽ trái (0-100)",
+        mcp.AddTool("self.motor.turn_left", "Robot rẽ trái (speed: 0-100)",
             PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(-speed);
                 SetRightMotor(speed);
-                return "Rẽ trái";
+                return "Robot rẽ trái";
             });
             
-        mcp.AddTool("self.motor.turn_right", "Rẽ phải (0-100)",
+        mcp.AddTool("self.motor.turn_right", "Robot rẽ phải (speed: 0-100)",
             PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(-speed);
-                return "Rẽ phải";
+                return "Robot rẽ phải";
             });
     }
 
+    // ===== MCP: LED =====
     void InitializeLedMcp() {
         auto& mcp = McpServer::GetInstance();
         
@@ -553,6 +628,7 @@ private:
             });
     }
 
+    // ===== MCP: BATTERY =====
     void InitializeBatteryMcp() {
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.battery.level", "Mức pin (%)",
@@ -561,10 +637,13 @@ private:
                 int adc_value = 0;
                 adc_oneshot_read(adc_handle_, POWER_ADC_CHANNEL, &adc_value);
                 int level = (adc_value * 100) / 4095;
-                return std::to_string(level) + "%";
+                char result[32];
+                snprintf(result, sizeof(result), "%d%%", level);
+                return std::string(result);
             });
     }
 
+    // ===== MCP: SENSOR =====
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
     }
@@ -658,7 +737,8 @@ public:
         });
     }
 
-    void InitializeTools() {}
+    void InitializeTools() {
+    }
 
     virtual Led* GetLed() override {
         static SingleLed led(LED_1);
@@ -670,12 +750,12 @@ public:
         static SimpleAudioCodec audio_codec(
             AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_SPK_GPIO_BCLK,
-            AUDIO_I2S_SPK_GPIO_LRCK,
-            AUDIO_I2S_SPK_GPIO_DOUT,
-            AUDIO_I2S_MIC_GPIO_SCK,
-            AUDIO_I2S_MIC_GPIO_WS,
-            AUDIO_I2S_MIC_GPIO_DIN
+            AUDIO_I2S_SPK_GPIO_BCLK,    // BCLK loa
+            AUDIO_I2S_SPK_GPIO_LRCK,    // LRCK loa
+            AUDIO_I2S_SPK_GPIO_DOUT,    // DOUT loa
+            AUDIO_I2S_MIC_GPIO_SCK,     // SCK mic
+            AUDIO_I2S_MIC_GPIO_WS,      // WS mic
+            AUDIO_I2S_MIC_GPIO_DIN      // DIN mic
         );
 #else
         static SimpleAudioCodec audio_codec(
@@ -697,6 +777,7 @@ public:
     }
 };
 
+// ===== SENSOR CONTROLLER =====
 SensorController::SensorController(WkEsp32s3Dev* board) {
     auto& mcp = McpServer::GetInstance();
 
