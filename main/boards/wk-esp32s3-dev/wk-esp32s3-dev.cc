@@ -1,6 +1,5 @@
 #include "wifi_board.h"
 #include "codecs/no_audio_codec.h"
-#include "codecs/generic_codec.h"
 #include "display/lcd_display.h"
 #include "display/oled_display.h"
 #include "system_reset.h"
@@ -25,6 +24,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
+#include <driver/i2s_std.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -34,6 +34,154 @@ class WkEsp32s3Dev;
 class SensorController {
 public:
     SensorController(WkEsp32s3Dev* board);
+};
+
+// ===== SIMPLE AUDIO CODEC (tự viết, không phụ thuộc thư viện ngoài) =====
+class SimpleAudioCodec : public AudioCodec {
+public:
+    SimpleAudioCodec(int input_sample_rate, int output_sample_rate,
+                     gpio_num_t spk_bclk, gpio_num_t spk_lrck, gpio_num_t spk_dout,
+                     gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din)
+        : AudioCodec(input_sample_rate, output_sample_rate) {
+        
+        ESP_LOGI("SimpleAudioCodec", "Initializing audio codec");
+        ESP_LOGI("SimpleAudioCodec", "SPK: BCLK=%d, LRCK=%d, DOUT=%d", spk_bclk, spk_lrck, spk_dout);
+        ESP_LOGI("SimpleAudioCodec", "MIC: SCK=%d, WS=%d, DIN=%d", mic_sck, mic_ws, mic_din);
+        
+        // Lưu lại thông số
+        spk_bclk_ = spk_bclk;
+        spk_lrck_ = spk_lrck;
+        spk_dout_ = spk_dout;
+        mic_sck_ = mic_sck;
+        mic_ws_ = mic_ws;
+        mic_din_ = mic_din;
+        
+        initialized_ = false;
+    }
+    
+    virtual bool Start() override {
+        if (initialized_) return true;
+        
+        ESP_LOGI("SimpleAudioCodec", "Starting audio codec");
+        
+        // Cấu hình I2S cho loa (MAX98357A)
+        i2s_std_config_t spk_config = {
+            .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(output_sample_rate_),
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+            .gpio_cfg = {
+                .mclk = GPIO_NUM_NC,
+                .bclk = spk_bclk_,
+                .ws = spk_lrck_,
+                .dout = spk_dout_,
+                .din = GPIO_NUM_NC,
+                .invert_flags = {
+                    .mclk_inv = false,
+                    .bclk_inv = false,
+                    .ws_inv = false,
+                },
+            },
+        };
+        
+        // Cấu hình I2S cho mic (INMP441)
+        i2s_std_config_t mic_config = {
+            .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(input_sample_rate_),
+            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
+            .gpio_cfg = {
+                .mclk = GPIO_NUM_NC,
+                .bclk = mic_sck_,
+                .ws = mic_ws_,
+                .dout = GPIO_NUM_NC,
+                .din = mic_din_,
+                .invert_flags = {
+                    .mclk_inv = false,
+                    .bclk_inv = false,
+                    .ws_inv = false,
+                },
+            },
+        };
+        
+        // Khởi tạo I2S cho loa
+        esp_err_t ret = i2s_channel_alloc_std(&spk_config, &spk_tx_handle_, &spk_rx_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE("SimpleAudioCodec", "Failed to allocate speaker I2S: %d", ret);
+            return false;
+        }
+        
+        ret = i2s_channel_enable(spk_tx_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE("SimpleAudioCodec", "Failed to enable speaker I2S: %d", ret);
+            return false;
+        }
+        
+        // Khởi tạo I2S cho mic
+        ret = i2s_channel_alloc_std(&mic_config, &mic_tx_handle_, &mic_rx_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE("SimpleAudioCodec", "Failed to allocate mic I2S: %d", ret);
+            return false;
+        }
+        
+        ret = i2s_channel_enable(mic_rx_handle_);
+        if (ret != ESP_OK) {
+            ESP_LOGE("SimpleAudioCodec", "Failed to enable mic I2S: %d", ret);
+            return false;
+        }
+        
+        initialized_ = true;
+        ESP_LOGI("SimpleAudioCodec", "Audio codec started successfully");
+        return true;
+    }
+    
+    virtual bool Stop() override {
+        if (!initialized_) return true;
+        
+        ESP_LOGI("SimpleAudioCodec", "Stopping audio codec");
+        
+        if (spk_tx_handle_) {
+            i2s_channel_disable(spk_tx_handle_);
+            i2s_del_channel(spk_tx_handle_);
+            spk_tx_handle_ = nullptr;
+        }
+        
+        if (mic_rx_handle_) {
+            i2s_channel_disable(mic_rx_handle_);
+            i2s_del_channel(mic_rx_handle_);
+            mic_rx_handle_ = nullptr;
+        }
+        
+        initialized_ = false;
+        return true;
+    }
+    
+    virtual bool Read(int16_t* data, int samples) override {
+        if (!initialized_ || !mic_rx_handle_) return false;
+        
+        size_t bytes_read = 0;
+        esp_err_t ret = i2s_channel_read(mic_rx_handle_, data, samples * sizeof(int16_t), &bytes_read, pdMS_TO_TICKS(100));
+        return (ret == ESP_OK && bytes_read == samples * sizeof(int16_t));
+    }
+    
+    virtual bool Write(int16_t* data, int samples) override {
+        if (!initialized_ || !spk_tx_handle_) return false;
+        
+        size_t bytes_written = 0;
+        esp_err_t ret = i2s_channel_write(spk_tx_handle_, data, samples * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(100));
+        return (ret == ESP_OK && bytes_written == samples * sizeof(int16_t));
+    }
+    
+private:
+    gpio_num_t spk_bclk_;
+    gpio_num_t spk_lrck_;
+    gpio_num_t spk_dout_;
+    gpio_num_t mic_sck_;
+    gpio_num_t mic_ws_;
+    gpio_num_t mic_din_;
+    
+    i2s_chan_handle_t spk_tx_handle_ = nullptr;
+    i2s_chan_handle_t spk_rx_handle_ = nullptr;
+    i2s_chan_handle_t mic_tx_handle_ = nullptr;
+    i2s_chan_handle_t mic_rx_handle_ = nullptr;
+    
+    bool initialized_ = false;
 };
 
 // ===== LED PATTERNS =====
@@ -588,28 +736,30 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-    static GenericAudioCodec audio_codec(
-        AUDIO_INPUT_SAMPLE_RATE,
-        AUDIO_OUTPUT_SAMPLE_RATE,
-        AUDIO_I2S_SPK_GPIO_BCLK,    // BCLK loa
-        AUDIO_I2S_SPK_GPIO_LRCK,    // LRCK loa
-        AUDIO_I2S_SPK_GPIO_DOUT,    // DOUT loa
-        AUDIO_I2S_MIC_GPIO_DIN,     // DIN mic
-        AUDIO_I2S_MIC_GPIO_SCK,     // SCK mic
-        AUDIO_I2S_MIC_GPIO_WS       // WS mic
-    );
+        static SimpleAudioCodec audio_codec(
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_SPK_GPIO_BCLK,    // BCLK loa
+            AUDIO_I2S_SPK_GPIO_LRCK,    // LRCK loa
+            AUDIO_I2S_SPK_GPIO_DOUT,    // DOUT loa
+            AUDIO_I2S_MIC_GPIO_SCK,     // SCK mic
+            AUDIO_I2S_MIC_GPIO_WS,      // WS mic
+            AUDIO_I2S_MIC_GPIO_DIN      // DIN mic
+        );
 #else
-    static GenericAudioCodec audio_codec(
-        AUDIO_INPUT_SAMPLE_RATE,
-        AUDIO_OUTPUT_SAMPLE_RATE,
-        AUDIO_I2S_GPIO_BCLK,
-        AUDIO_I2S_GPIO_WS,
-        AUDIO_I2S_GPIO_DOUT,
-        AUDIO_I2S_GPIO_DIN
-    );
+        static SimpleAudioCodec audio_codec(
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DIN
+        );
 #endif
-    return &audio_codec;
-}
+        return &audio_codec;
+    }
 
     virtual Display* GetDisplay() override {
         return display_;
