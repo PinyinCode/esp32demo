@@ -44,24 +44,21 @@ public:
                      gpio_num_t mic_sck, gpio_num_t mic_ws, gpio_num_t mic_din)
         : AudioCodec(input_sample_rate, output_sample_rate) {
         
-        ESP_LOGI("SimpleAudioCodec", "Initializing audio codec");
-        ESP_LOGI("SimpleAudioCodec", "SPK: BCLK=%d, LRCK=%d, DOUT=%d", spk_bclk, spk_lrck, spk_dout);
-        ESP_LOGI("SimpleAudioCodec", "MIC: SCK=%d, WS=%d, DIN=%d", mic_sck, mic_ws, mic_din);
-        
         spk_bclk_ = spk_bclk;
         spk_lrck_ = spk_lrck;
         spk_dout_ = spk_dout;
         mic_sck_ = mic_sck;
         mic_ws_ = mic_ws;
         mic_din_ = mic_din;
-        
         initialized_ = false;
+        
+        ESP_LOGI("SimpleAudioCodec", "Initialized: BCLK=%d, LRCK=%d, DOUT=%d", spk_bclk, spk_lrck, spk_dout);
     }
     
     virtual bool Start() override {
         if (initialized_) return true;
         
-        ESP_LOGI("SimpleAudioCodec", "Starting audio codec");
+        ESP_LOGI("SimpleAudioCodec", "Starting...");
         
         // Cấu hình I2S cho loa (MAX98357A)
         i2s_std_config_t spk_config = {
@@ -102,45 +99,50 @@ public:
         // Khởi tạo I2S cho loa
         esp_err_t ret = i2s_channel_alloc_std(&spk_config, &spk_tx_handle_, &spk_rx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Failed to allocate speaker I2S: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Speaker alloc failed: %d", ret);
             return false;
         }
-        
         ret = i2s_channel_enable(spk_tx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Failed to enable speaker I2S: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Speaker enable failed: %d", ret);
             return false;
         }
         
         // Khởi tạo I2S cho mic
         ret = i2s_channel_alloc_std(&mic_config, &mic_tx_handle_, &mic_rx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Failed to allocate mic I2S: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Mic alloc failed: %d", ret);
             return false;
         }
-        
         ret = i2s_channel_enable(mic_rx_handle_);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Failed to enable mic I2S: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Mic enable failed: %d", ret);
             return false;
         }
         
         initialized_ = true;
-        ESP_LOGI("SimpleAudioCodec", "Audio codec started successfully");
+        ESP_LOGI("SimpleAudioCodec", "Started successfully");
         return true;
     }
     
     virtual bool Stop() override {
         if (!initialized_) return true;
         
-        ESP_LOGI("SimpleAudioCodec", "Stopping audio codec");
+        ESP_LOGI("SimpleAudioCodec", "Stopping...");
         
         if (spk_tx_handle_) {
             i2s_channel_disable(spk_tx_handle_);
             i2s_del_channel(spk_tx_handle_);
             spk_tx_handle_ = nullptr;
         }
-        
+        if (spk_rx_handle_) {
+            i2s_del_channel(spk_rx_handle_);
+            spk_rx_handle_ = nullptr;
+        }
+        if (mic_tx_handle_) {
+            i2s_del_channel(mic_tx_handle_);
+            mic_tx_handle_ = nullptr;
+        }
         if (mic_rx_handle_) {
             i2s_channel_disable(mic_rx_handle_);
             i2s_del_channel(mic_rx_handle_);
@@ -151,20 +153,26 @@ public:
         return true;
     }
     
-    virtual bool Read(int16_t* data, int samples) override {
-        if (!initialized_ || !mic_rx_handle_) return false;
+    virtual int Read(int16_t* data, int samples) override {
+        if (!initialized_ || !mic_rx_handle_) return 0;
         
         size_t bytes_read = 0;
         esp_err_t ret = i2s_channel_read(mic_rx_handle_, data, samples * sizeof(int16_t), &bytes_read, pdMS_TO_TICKS(100));
-        return (ret == ESP_OK && bytes_read == samples * sizeof(int16_t));
+        if (ret == ESP_OK && bytes_read == samples * sizeof(int16_t)) {
+            return samples;
+        }
+        return 0;
     }
     
-    virtual bool Write(int16_t* data, int samples) override {
-        if (!initialized_ || !spk_tx_handle_) return false;
+    virtual int Write(const int16_t* data, int samples) override {
+        if (!initialized_ || !spk_tx_handle_) return 0;
         
         size_t bytes_written = 0;
-        esp_err_t ret = i2s_channel_write(spk_tx_handle_, data, samples * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(100));
-        return (ret == ESP_OK && bytes_written == samples * sizeof(int16_t));
+        esp_err_t ret = i2s_channel_write(spk_tx_handle_, (void*)data, samples * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(100));
+        if (ret == ESP_OK && bytes_written == samples * sizeof(int16_t)) {
+            return samples;
+        }
+        return 0;
     }
     
     virtual int GetInputSampleRate() override {
