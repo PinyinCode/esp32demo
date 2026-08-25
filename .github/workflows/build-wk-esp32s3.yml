@@ -38,6 +38,24 @@ jobs:
           echo "=== locales ==="
           ls main/assets/locales/vi-VN/language.json 2>/dev/null || echo "THIẾU language.json!"
 
+      - name: Fix component dependencies
+        shell: bash
+        run: |
+          if [ ! -f main/idf_component.yml ]; then
+            echo "Creating main/idf_component.yml"
+            cat > main/idf_component.yml << 'EOF'
+## IDF Component Manager Manifest File
+dependencies:
+  espressif/esp-box: "^3.0.0"
+  espressif/esp-sr: "^1.0.0"
+  espressif/esp-rainmaker: "^1.0.0"
+  lvgl/lvgl: "^8.3.0"
+EOF
+          else
+            echo "main/idf_component.yml exists"
+            cat main/idf_component.yml
+          fi
+
       - name: Build firmware
         shell: bash
         run: |
