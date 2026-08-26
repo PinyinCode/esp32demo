@@ -1,25 +1,19 @@
 #include "wifi_board.h"
 #include "max98357a_codec.h"
-#include "display/lcd_display.h"
 #include "display/oled_display.h"
-#include "system_reset.h"
 #include "application.h"
 #include "button.h"
 #include "config.h"
 #include "mcp_server.h"
 #include "led/single_led.h"
-#include "assets/lang_config.h"
 #include <wifi_station.h>
 #include <esp_log.h>
-#include <esp_timer.h>
 #include <driver/i2c_master.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
-#include <driver/spi_common.h>
 #include <driver/ledc.h>
 #include <driver/gpio.h>
-#include <esp_rom_sys.h>
 #include <esp_adc/adc_oneshot.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -31,23 +25,18 @@
 
 class WkEsp32s3Dev;
 
-// ===== SENSOR CONTROLLER =====
 class SensorController {
 public:
     SensorController(WkEsp32s3Dev* board);
 };
 
-// ===== LED PATTERNS =====
 enum LedPattern {
     PATTERN_OFF = 0,
     PATTERN_BREATH,
     PATTERN_BLINK_FAST,
-    PATTERN_BLINK_SLOW,
     PATTERN_HEARTBEAT,
     PATTERN_WAVE,
-    PATTERN_COMET,
     PATTERN_PULSE,
-    PATTERN_TWINKLE,
 };
 
 struct LedAnimation {
@@ -63,154 +52,36 @@ private:
     i2c_master_bus_handle_t display_i2c_bus_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
-    Button volume_up_button_;
-    Button volume_down_button_;
-    SensorController* sensor_controller_ = nullptr;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // LED
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, false};
     uint32_t led_tick_ = 0;
     bool led_auto_mode_ = true;
-    uint32_t led_timeout_ms_ = 0;
-    uint32_t led_timeout_start_ = 0;
-    const int DEFAULT_LED_DURATION_ = 30;
-
-    // Face
     std::string current_face_ = "";
     bool face_auto_mode_ = true;
 
     friend class SensorController;
 
-    // ===== FACE FUNCTIONS =====
-    void DrawEye(int cx, int cy, int r, bool blink = false) {
-        if (!display_) return;
-        if (blink) {
-            display_->DrawLine(cx - r, cy, cx + r, cy, 1);
-        } else {
-            display_->DrawCircle(cx, cy, r, 1);
-            display_->DrawCircle(cx, cy, r / 2, 1);
-        }
-    }
-
-    void DrawMouth(int cx, int cy, int w, int h, bool smile = true) {
-        if (!display_) return;
-        if (smile) {
-            for (int x = -w/2; x <= w/2; x++) {
-                int y = -(h * x * x) / (w * w / 4) + h;
-                display_->DrawPixel(cx + x, cy + y, 1);
-            }
-        } else {
-            for (int x = -w/2; x <= w/2; x++) {
-                int y = (h * x * x) / (w * w / 4);
-                display_->DrawPixel(cx + x, cy + y, 1);
-            }
-        }
-    }
-
-    void DrawEyebrow(int cx, int cy, int w, int h, bool raised = true) {
-        if (!display_) return;
-        if (raised) {
-            for (int x = -w/2; x <= w/2; x++) {
-                int y = -(h * x * x) / (w * w / 4);
-                display_->DrawPixel(cx + x, cy + y, 1);
-            }
-        } else {
-            for (int x = -w/2; x <= w/2; x++) {
-                int y = (h * x * x) / (w * w / 4);
-                display_->DrawPixel(cx + x, cy + y, 1);
-            }
-        }
-    }
-
+    // ===== FACE (dùng emoji) =====
     void ShowFace(const std::string& emotion) {
         if (!display_) return;
         if (emotion == current_face_) return;
         current_face_ = emotion;
-        display_->Clear();
         
-        if (emotion == "neutral") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawLine(49, 45, 79, 45, 1);
-        }
-        else if (emotion == "happy") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            DrawMouth(64, 45, 30, 10, true);
-            DrawEyebrow(40, 18, 16, 3, true);
-            DrawEyebrow(88, 18, 16, 3, true);
-        }
-        else if (emotion == "sad") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            DrawMouth(64, 50, 30, 10, false);
-            DrawEyebrow(40, 18, 16, 3, false);
-            DrawEyebrow(88, 18, 16, 3, false);
-        }
-        else if (emotion == "angry") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            DrawMouth(64, 50, 20, 5, false);
-            DrawEyebrow(40, 15, 16, 5, false);
-            DrawEyebrow(88, 15, 16, 5, false);
-        }
-        else if (emotion == "surprised") {
-            DrawEye(40, 30, 12);
-            DrawEye(88, 30, 12);
-            display_->DrawCircle(64, 45, 8, 1);
-            DrawEyebrow(40, 15, 16, 3, true);
-            DrawEyebrow(88, 15, 16, 3, true);
-        }
-        else if (emotion == "sleeping") {
-            DrawEye(40, 30, 8, true);
-            DrawEye(88, 30, 8, true);
-            DrawMouth(64, 45, 15, 3, true);
-        }
-        else if (emotion == "thinking") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawCircle(40, 26, 4, 1);
-            display_->DrawCircle(88, 26, 4, 1);
-            DrawMouth(64, 45, 20, 5, true);
-            DrawEyebrow(40, 18, 16, 3, true);
-            DrawEyebrow(88, 18, 16, 3, false);
-        }
-        else if (emotion == "listening") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawCircle(36, 30, 4, 1);
-            display_->DrawCircle(84, 30, 4, 1);
-            display_->DrawCircle(64, 45, 10, 1);
-            DrawEyebrow(40, 18, 16, 3, true);
-            DrawEyebrow(88, 18, 16, 3, true);
-        }
-        else if (emotion == "speaking") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            for (int i = 0; i < 6; i++) {
-                display_->DrawCircle(64, 45, 5 + i, 1);
-            }
-        }
-        else if (emotion == "love") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            DrawMouth(64, 45, 35, 12, true);
-            display_->DrawCircle(30, 50, 3, 1);
-            display_->DrawCircle(98, 50, 3, 1);
-        }
-        else if (emotion == "confused") {
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawLine(49, 45, 64, 42, 1);
-            display_->DrawLine(64, 42, 79, 45, 1);
-            DrawEyebrow(40, 18, 16, 3, true);
-            DrawEyebrow(88, 18, 16, 3, false);
-        }
-        display_->Update();
+        if (emotion == "happy") display_->SetEmotion("😊");
+        else if (emotion == "sad") display_->SetEmotion("😢");
+        else if (emotion == "angry") display_->SetEmotion("😠");
+        else if (emotion == "surprised") display_->SetEmotion("😮");
+        else if (emotion == "sleeping") display_->SetEmotion("😴");
+        else if (emotion == "thinking") display_->SetEmotion("🤔");
+        else if (emotion == "listening") display_->SetEmotion("👂");
+        else if (emotion == "speaking") display_->SetEmotion("🗣️");
+        else if (emotion == "love") display_->SetEmotion("😍");
+        else if (emotion == "confused") display_->SetEmotion("😕");
+        else display_->SetEmotion("😐");
     }
 
     void UpdateFaceByState() {
@@ -225,7 +96,7 @@ private:
         }
     }
 
-    // ===== LED EFFECTS =====
+    // ===== LED =====
     int BreathEffect(uint32_t t, int s) {
         float period = 2000.0f / s;
         float phase = (t % (int)period) / period * 2 * 3.14159f;
@@ -273,9 +144,6 @@ private:
     void UpdateLed() {
         led_tick_ += 50;
         if (led_tick_ % 500 == 0) UpdateFaceByState();
-        if (led_timeout_ms_ > 0 && led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
-            led_timeout_ms_ = 0; led_auto_mode_ = true;
-        }
         if (led_auto_mode_) {
             auto& app = Application::GetInstance();
             switch (app.GetDeviceState()) {
@@ -449,10 +317,6 @@ private:
                 if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_);
                 return "Âm lượng: " + std::to_string(current_volume_) + "%";
             });
-        mcp.AddTool("self.audio.mute", "Tắt tiếng", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue { if (audio_codec_) audio_codec_->SetOutputVolume(0); return "Tắt tiếng"; });
-        mcp.AddTool("self.audio.unmute", "Bật tiếng", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue { if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_); return "Bật tiếng"; });
     }
 
     void InitializeLedMcp() {
@@ -466,13 +330,6 @@ private:
                 led_auto_mode_ = false;
                 anim_led1_ = {PATTERN_BREATH, p["speed"].value<int>(), true};
                 return "LED thở";
-            });
-        mcp.AddTool("self.led.blink", "LED nhấp nháy", PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                led_auto_mode_ = false;
-                anim_led1_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), true};
-                anim_led2_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), true};
-                return "LED nhấp nháy";
             });
         mcp.AddTool("self.led.auto", "LED tự động", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue { led_auto_mode_ = true; return "OK"; });
@@ -494,30 +351,21 @@ private:
                 ShowFace(p["emotion"].value<std::string>());
                 return "OK";
             });
-        mcp.AddTool("self.face.happy", "Mặt vui", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue { face_auto_mode_ = false; ShowFace("happy"); return "Vui!"; });
-        mcp.AddTool("self.face.sad", "Mặt buồn", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue { face_auto_mode_ = false; ShowFace("sad"); return "Buồn"; });
         mcp.AddTool("self.face.auto", "Tự động", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue { face_auto_mode_ = true; UpdateFaceByState(); return "OK"; });
+            [this](const PropertyList& p) -> ReturnValue { face_auto_mode_ = true; return "OK"; });
     }
 
     void InitializeEmotionMcp() {
         auto& mcp = McpServer::GetInstance();
-        mcp.AddTool("self.emotion.set", "Đặt cảm xúc", PropertyList({Property("emotion", kPropertyTypeString, "neutral")}),
-            [this](const PropertyList& p) -> ReturnValue {
-                ExecuteEmotion(p["emotion"].value<std::string>());
-                return "OK";
-            });
         mcp.AddTool("self.emotion.happy", "Vui vẻ", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("happy"); return "Vui!"; });
         mcp.AddTool("self.emotion.sad", "Buồn", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("sad"); return "Buồn"; });
-        mcp.AddTool("self.emotion.angry", "Giận dữ", PropertyList(),
+        mcp.AddTool("self.emotion.angry", "Giận", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("angry"); return "Giận!"; });
-        mcp.AddTool("self.emotion.scared", "Sợ hãi", PropertyList(),
+        mcp.AddTool("self.emotion.scared", "Sợ", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("scared"); return "Sợ!"; });
-        mcp.AddTool("self.emotion.love", "Yêu thương", PropertyList(),
+        mcp.AddTool("self.emotion.love", "Yêu", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("love"); return "Yêu!"; });
     }
 
@@ -532,14 +380,15 @@ private:
     }
 
     void InitializeSensorMcp() {
-        sensor_controller_ = new SensorController(this);
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return gpio_get_level(PIR_MOTION_SENSOR_PIN) ? "Có chuyển động" : "Không";
+            });
     }
 
 public:
-    WkEsp32s3Dev() : boot_button_(BOOT_BUTTON_GPIO),
-        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
-
+    WkEsp32s3Dev() : boot_button_(BOOT_BUTTON_GPIO) {
         InitializePirSensor();
         InitializeLedGpio();
         InitializeAdc();
@@ -577,9 +426,7 @@ public:
         if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_);
     }
 
-    bool ReadMotionDetected() {
-        return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
-    }
+    bool ReadMotionDetected() { return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1; }
 
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
     void InitializeDisplayI2c() {
@@ -604,14 +451,10 @@ public:
         io_config.lcd_param_bits = 8;
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(display_i2c_bus_, &io_config, &panel_io_));
-
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = GPIO_NUM_NC;
         panel_config.bits_per_pixel = 1;
-
-        esp_lcd_panel_ssd1306_config_t ssd1306_config = {
-            .height = static_cast<uint8_t>(DISPLAY_HEIGHT),
-        };
+        esp_lcd_panel_ssd1306_config_t ssd1306_config = {.height = static_cast<uint8_t>(DISPLAY_HEIGHT)};
         panel_config.vendor_config = &ssd1306_config;
 
         ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_));
@@ -623,10 +466,7 @@ public:
     }
 #endif
 
-    virtual Led* GetLed() override {
-        static SingleLed led(LED_1);
-        return &led;
-    }
+    virtual Led* GetLed() override { static SingleLed led(LED_1); return &led; }
 
     virtual AudioCodec* GetAudioCodec() override {
         static Max98357aCodec audio_codec(
@@ -643,15 +483,5 @@ public:
 
     virtual Display* GetDisplay() override { return display_; }
 };
-
-// ===== SENSOR CONTROLLER =====
-SensorController::SensorController(WkEsp32s3Dev* board) {
-    auto& mcp = McpServer::GetInstance();
-    mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
-        PropertyList(),
-        [board](const PropertyList& p) -> ReturnValue {
-            return board->ReadMotionDetected() ? "Có chuyển động" : "Không";
-        });
-}
 
 DECLARE_BOARD(WkEsp32s3Dev);
