@@ -1,5 +1,5 @@
 #include "wifi_board.h"
-#include "max98357a_codec.h"  // THAY ĐỔI: Include codec mới
+#include "max98357a_codec.h"
 #include "display/lcd_display.h"
 #include "display/oled_display.h"
 #include "system_reset.h"
@@ -67,11 +67,14 @@ private:
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+    AudioCodec* audio_codec_ = nullptr;  // THÊM: Lưu trữ audio codec
+    int current_volume_ = 80;            // THÊM: Lưu âm lượng hiện tại
 
     // LED animation variables
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
+    bool led_auto_mode_ = true;          // THÊM: LED tự động theo trạng thái
 
     friend class SensorController;
 
@@ -126,7 +129,10 @@ private:
     }
 
     void ApplyLedEffect(int led_pin, LedAnimation anim) {
-        if (!anim.active) return;
+        if (!anim.active) {
+            gpio_set_level((gpio_num_t)led_pin, 0);
+            return;
+        }
         
         int brightness = 0;
         uint32_t time = led_tick_;
@@ -174,46 +180,49 @@ private:
     }
 
     void UpdateLedCreative() {
-        auto& app = Application::GetInstance();
-        auto state = app.GetDeviceState();
         led_tick_ += 50;
         
-        switch (state) {
-            case kDeviceStateIdle:
-                anim_led1_.pattern = PATTERN_BREATH;
-                anim_led1_.speed = 3;
-                anim_led2_.pattern = PATTERN_OFF;
-                break;
-            case kDeviceStateConnecting:
-                anim_led1_.pattern = PATTERN_PULSE;
-                anim_led1_.speed = 8;
-                anim_led2_.pattern = PATTERN_PULSE;
-                anim_led2_.speed = 8;
-                break;
-            case kDeviceStateListening:
-                anim_led1_.pattern = PATTERN_BLINK_FAST;
-                anim_led1_.speed = 10;
-                anim_led2_.pattern = PATTERN_WAVE;
-                anim_led2_.speed = 7;
-                break;
-            case kDeviceStateSpeaking:
-                anim_led1_.pattern = PATTERN_HEARTBEAT;
-                anim_led1_.speed = 5;
-                anim_led2_.pattern = PATTERN_BREATH;
-                anim_led2_.speed = 4;
-                break;
-            case kDeviceStateStarting:
-                anim_led1_.pattern = PATTERN_BLINK_SLOW;
-                anim_led1_.speed = 5;
-                anim_led2_.pattern = PATTERN_BLINK_SLOW;
-                anim_led2_.speed = 5;
-                break;
-            default:
-                anim_led1_.pattern = PATTERN_BLINK_FAST;
-                anim_led1_.speed = 12;
-                anim_led2_.pattern = PATTERN_BLINK_FAST;
-                anim_led2_.speed = 12;
-                break;
+        if (led_auto_mode_) {
+            auto& app = Application::GetInstance();
+            auto state = app.GetDeviceState();
+            
+            switch (state) {
+                case kDeviceStateIdle:
+                    anim_led1_.pattern = PATTERN_BREATH;
+                    anim_led1_.speed = 3;
+                    anim_led2_.pattern = PATTERN_OFF;
+                    break;
+                case kDeviceStateConnecting:
+                    anim_led1_.pattern = PATTERN_PULSE;
+                    anim_led1_.speed = 8;
+                    anim_led2_.pattern = PATTERN_PULSE;
+                    anim_led2_.speed = 8;
+                    break;
+                case kDeviceStateListening:
+                    anim_led1_.pattern = PATTERN_BLINK_FAST;
+                    anim_led1_.speed = 10;
+                    anim_led2_.pattern = PATTERN_WAVE;
+                    anim_led2_.speed = 7;
+                    break;
+                case kDeviceStateSpeaking:
+                    anim_led1_.pattern = PATTERN_HEARTBEAT;
+                    anim_led1_.speed = 5;
+                    anim_led2_.pattern = PATTERN_BREATH;
+                    anim_led2_.speed = 4;
+                    break;
+                case kDeviceStateStarting:
+                    anim_led1_.pattern = PATTERN_BLINK_SLOW;
+                    anim_led1_.speed = 5;
+                    anim_led2_.pattern = PATTERN_BLINK_SLOW;
+                    anim_led2_.speed = 5;
+                    break;
+                default:
+                    anim_led1_.pattern = PATTERN_BLINK_FAST;
+                    anim_led1_.speed = 12;
+                    anim_led2_.pattern = PATTERN_BLINK_FAST;
+                    anim_led2_.speed = 12;
+                    break;
+            }
         }
         
         ApplyLedEffect(LED_1, anim_led1_);
@@ -435,13 +444,148 @@ private:
             });
     }
 
-    // ===== MCP: LED =====
+    // ===== MCP: AUDIO VOLUME =====
+    void InitializeVolumeMcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.audio.volume_set", "Đặt âm lượng (0-100)",
+            PropertyList({Property("volume", kPropertyTypeInteger, 80, 0, 100)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int volume = p["volume"].value<int>();
+                current_volume_ = std::max(0, std::min(100, volume));
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(current_volume_);
+                }
+                return "Đã đặt âm lượng: " + std::to_string(current_volume_) + "%";
+            });
+            
+        mcp.AddTool("self.audio.volume_up", "Tăng âm lượng lên 10%",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                current_volume_ = std::min(100, current_volume_ + 10);
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(current_volume_);
+                }
+                return "Âm lượng: " + std::to_string(current_volume_) + "%";
+            });
+            
+        mcp.AddTool("self.audio.volume_down", "Giảm âm lượng xuống 10%",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                current_volume_ = std::max(0, current_volume_ - 10);
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(current_volume_);
+                }
+                return "Âm lượng: " + std::to_string(current_volume_) + "%";
+            });
+            
+        mcp.AddTool("self.audio.mute", "Tắt tiếng",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(0);
+                }
+                return "Đã tắt tiếng";
+            });
+            
+        mcp.AddTool("self.audio.unmute", "Bật tiếng (khôi phục âm lượng)",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(current_volume_);
+                }
+                return "Đã bật tiếng, âm lượng: " + std::to_string(current_volume_) + "%";
+            });
+    }
+
+    // ===== MCP: LED EFFECTS =====
+    void InitializeLedEffectsMcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.led.breath", "LED thở",
+            PropertyList({Property("speed", kPropertyTypeInteger, 3, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                int speed = p["speed"].value<int>();
+                anim_led1_.pattern = PATTERN_BREATH;
+                anim_led1_.speed = speed;
+                anim_led1_.active = true;
+                anim_led2_.pattern = PATTERN_OFF;
+                anim_led2_.active = false;
+                return "LED đang thở";
+            });
+            
+        mcp.AddTool("self.led.blink", "LED nhấp nháy",
+            PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                int speed = p["speed"].value<int>();
+                anim_led1_.pattern = PATTERN_BLINK_FAST;
+                anim_led1_.speed = speed;
+                anim_led1_.active = true;
+                anim_led2_.pattern = PATTERN_BLINK_FAST;
+                anim_led2_.speed = speed;
+                anim_led2_.active = true;
+                return "LED đang nhấp nháy";
+            });
+            
+        mcp.AddTool("self.led.heartbeat", "LED nhịp tim",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_.pattern = PATTERN_HEARTBEAT;
+                anim_led1_.active = true;
+                anim_led2_.pattern = PATTERN_OFF;
+                anim_led2_.active = false;
+                return "LED đang chạy hiệu ứng nhịp tim";
+            });
+            
+        mcp.AddTool("self.led.wave", "LED sóng",
+            PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                int speed = p["speed"].value<int>();
+                anim_led1_.pattern = PATTERN_WAVE;
+                anim_led1_.speed = speed;
+                anim_led1_.active = true;
+                anim_led2_.pattern = PATTERN_WAVE;
+                anim_led2_.speed = speed;
+                anim_led2_.active = true;
+                return "LED đang chạy hiệu ứng sóng";
+            });
+            
+        mcp.AddTool("self.led.auto", "LED tự động theo trạng thái",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = true;
+                anim_led1_.active = true;
+                anim_led2_.active = true;
+                return "LED đã chuyển sang chế độ tự động";
+            });
+            
+        mcp.AddTool("self.led.off_all", "Tắt tất cả LED",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_.pattern = PATTERN_OFF;
+                anim_led1_.active = false;
+                anim_led2_.pattern = PATTERN_OFF;
+                anim_led2_.active = false;
+                gpio_set_level(LED_1, 0);
+                gpio_set_level(LED_2, 0);
+                return "Đã tắt tất cả LED";
+            });
+    }
+
+    // ===== MCP: LED BASIC =====
     void InitializeLedMcp() {
         auto& mcp = McpServer::GetInstance();
         
         mcp.AddTool("self.led.on", "Bật LED 1",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_.active = false;
                 gpio_set_level(LED_1, 1);
                 return "Đã bật LED 1";
             });
@@ -456,6 +600,8 @@ private:
         mcp.AddTool("self.led2.on", "Bật LED 2",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led2_.active = false;
                 gpio_set_level(LED_2, 1);
                 return "Đã bật LED 2";
             });
@@ -504,6 +650,8 @@ public:
         InitializeSensorMcp();
         InitializeLedGpio();
         InitializeLedMcp();
+        InitializeLedEffectsMcp();  // THÊM: LED effects
+        InitializeVolumeMcp();      // THÊM: Volume control
         InitializeAdc();
         InitializeBatteryMcp();
 
@@ -518,6 +666,12 @@ public:
 
         InitializeButtons();
         InitializeTools();
+        
+        // Lấy audio codec
+        audio_codec_ = GetAudioCodec();
+        if (audio_codec_) {
+            audio_codec_->SetOutputVolume(current_volume_);
+        }
     }
 
     bool ReadMotionDetected() {
@@ -585,17 +739,16 @@ public:
         return &led;
     }
 
-    // ===== THAY ĐỔI: Sử dụng Max98357aCodec =====
     virtual AudioCodec* GetAudioCodec() override {
         static Max98357aCodec audio_codec(
-            AUDIO_INPUT_SAMPLE_RATE,           // 16000
-            AUDIO_OUTPUT_SAMPLE_RATE,          // 24000
-            (gpio_num_t)AUDIO_I2S_SPK_GPIO_BCLK,  // GPIO 15
-            (gpio_num_t)AUDIO_I2S_SPK_GPIO_LRCK,  // GPIO 16
-            (gpio_num_t)AUDIO_I2S_SPK_GPIO_DOUT,  // GPIO 7
-            (gpio_num_t)AUDIO_I2S_MIC_GPIO_SCK,   // GPIO 5
-            (gpio_num_t)AUDIO_I2S_MIC_GPIO_WS,    // GPIO 4
-            (gpio_num_t)AUDIO_I2S_MIC_GPIO_DIN    // GPIO 6
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            (gpio_num_t)AUDIO_I2S_SPK_GPIO_BCLK,
+            (gpio_num_t)AUDIO_I2S_SPK_GPIO_LRCK,
+            (gpio_num_t)AUDIO_I2S_SPK_GPIO_DOUT,
+            (gpio_num_t)AUDIO_I2S_MIC_GPIO_SCK,
+            (gpio_num_t)AUDIO_I2S_MIC_GPIO_WS,
+            (gpio_num_t)AUDIO_I2S_MIC_GPIO_DIN
         );
         return &audio_codec;
     }
