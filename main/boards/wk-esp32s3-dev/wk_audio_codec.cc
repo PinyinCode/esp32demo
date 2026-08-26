@@ -38,7 +38,6 @@ WkAudioCodec::WkAudioCodec(int input_sample_rate, int output_sample_rate,
              sck_pin, ws_pin, din_pin,
              mic_slot == I2S_STD_SLOT_LEFT ? "LEFT" : 
              mic_slot == I2S_STD_SLOT_RIGHT ? "RIGHT" : "BOTH");
-    ESP_LOGI(TAG, "Input SR: %d, Output SR: %d", input_sample_rate, output_sample_rate);
 }
 
 WkAudioCodec::~WkAudioCodec() {
@@ -58,7 +57,11 @@ void WkAudioCodec::CreateDuplexChannels() {
         .auto_clear_before_cb = false,
         .intr_priority = 0,
     };
-    ESP_ERROR_CHECK(i2s_new_channel(&tx_chan_config, &tx_handle_, nullptr));
+    esp_err_t ret = i2s_new_channel(&tx_chan_config, &tx_handle_, nullptr);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create TX channel: %d", ret);
+        return;
+    }
     
     i2s_std_config_t tx_config = {
         .clk_cfg = {
@@ -93,7 +96,11 @@ void WkAudioCodec::CreateDuplexChannels() {
             },
         },
     };
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(tx_handle_, &tx_config));
+    ret = i2s_channel_init_std_mode(tx_handle_, &tx_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init TX channel: %d", ret);
+        return;
+    }
     ESP_LOGI(TAG, "TX channel initialized for speaker");
     
     // ===== RX Channel (INMP441 Microphone) =====
@@ -106,7 +113,11 @@ void WkAudioCodec::CreateDuplexChannels() {
         .auto_clear_before_cb = false,
         .intr_priority = 0,
     };
-    ESP_ERROR_CHECK(i2s_new_channel(&rx_chan_config, nullptr, &rx_handle_));
+    ret = i2s_new_channel(&rx_chan_config, nullptr, &rx_handle_);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to create RX channel: %d", ret);
+        return;
+    }
     
     i2s_std_config_t rx_config = {
         .clk_cfg = {
@@ -141,10 +152,12 @@ void WkAudioCodec::CreateDuplexChannels() {
             },
         },
     };
-    ESP_ERROR_CHECK(i2s_channel_init_std_mode(rx_handle_, &rx_config));
+    ret = i2s_channel_init_std_mode(rx_handle_, &rx_config);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to init RX channel: %d", ret);
+        return;
+    }
     ESP_LOGI(TAG, "RX channel initialized for microphone");
-    
-    ESP_LOGI(TAG, "I2S duplex channels created successfully");
 }
 
 bool WkAudioCodec::Start() {
@@ -157,12 +170,25 @@ bool WkAudioCodec::Start() {
     
     ESP_LOGI(TAG, "Starting WK Audio Codec...");
     
-    // Create I2S channels
     CreateDuplexChannels();
     
-    // Enable channels
-    ESP_ERROR_CHECK(i2s_channel_enable(tx_handle_));
-    ESP_ERROR_CHECK(i2s_channel_enable(rx_handle_));
+    if (tx_handle_ == nullptr || rx_handle_ == nullptr) {
+        ESP_LOGE(TAG, "Failed to create I2S channels");
+        return false;
+    }
+    
+    esp_err_t ret = i2s_channel_enable(tx_handle_);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable TX channel: %d", ret);
+        return false;
+    }
+    
+    ret = i2s_channel_enable(rx_handle_);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable RX channel: %d", ret);
+        i2s_channel_disable(tx_handle_);
+        return false;
+    }
     
     started_ = true;
     input_enabled_ = true;
@@ -216,18 +242,7 @@ int WkAudioCodec::Read(int16_t* dest, int samples) {
         return 0;
     }
     
-    int samples_read = bytes_read / sizeof(int16_t);
-    
-    // Apply input gain if needed
-    if (input_gain_ != 1.0f) {
-        float gain = input_gain_ / 30.0f; // Scale 0-30 to 0-1
-        for (int i = 0; i < samples_read; i++) {
-            int32_t val = (int32_t)dest[i] * gain;
-            dest[i] = (int16_t)std::max(-32768, std::min(32767, val));
-        }
-    }
-    
-    return samples_read;
+    return bytes_read / sizeof(int16_t);
 }
 
 int WkAudioCodec::Write(const int16_t* data, int samples) {
@@ -235,14 +250,11 @@ int WkAudioCodec::Write(const int16_t* data, int samples) {
         return 0;
     }
     if (mute_) {
-        // Return samples count but don't write (muted)
         return samples;
     }
     
-    // Apply volume scaling
     float gain = output_volume_ / 100.0f;
     
-    // Allocate buffer for scaled data
     std::vector<int16_t> scaled_data(samples);
     for (int i = 0; i < samples; i++) {
         int32_t val = (int32_t)data[i] * gain;
@@ -263,11 +275,9 @@ int WkAudioCodec::Write(const int16_t* data, int samples) {
 
 void WkAudioCodec::SetOutputVolume(int volume) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
-    current_volume_ = std::max(0, std::min(100, volume));
-    output_volume_ = current_volume_;
+    output_volume_ = std::max(0, std::min(100, volume));
     ESP_LOGI(TAG, "Set output volume to %d%%", output_volume_);
     
-    // Save to settings
     Settings settings("audio", true);
     settings.SetInt("output_volume", output_volume_);
 }
