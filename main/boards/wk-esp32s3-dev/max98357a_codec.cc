@@ -1,7 +1,8 @@
 #include "max98357a_codec.h"
 #include <esp_log.h>
 #include <algorithm>
-
+#include <freertos/FreeRTOS.h>  // THÊM: Cho pdMS_TO_TICKS
+#include <freertos/task.h>      // THÊM: Cho vTaskDelay
 #define TAG "Max98357aCodec"
 
 Max98357aCodec::Max98357aCodec(int input_sample_rate, int output_sample_rate,
