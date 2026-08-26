@@ -87,9 +87,6 @@ private:
     std::string current_emotion_ = "neutral";
     bool emotion_auto_mode_ = true;
 
-    // Eye animation
-    uint32_t eye_tick_ = 0;
-
     friend class SensorController;
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -152,16 +149,36 @@ private:
         uint32_t time = led_tick_;
         
         switch (anim.pattern) {
-            case PATTERN_OFF: brightness = 0; break;
-            case PATTERN_BREATH: brightness = BreathEffect(time, anim.speed); break;
-            case PATTERN_BLINK_FAST: brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0; break;
-            case PATTERN_BLINK_SLOW: brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0; break;
-            case PATTERN_HEARTBEAT: brightness = HeartbeatEffect(time); break;
-            case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            case PATTERN_PULSE: brightness = PulseEffect(time, anim.speed, 0); break;
-            case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            default: brightness = 0; break;
+            case PATTERN_OFF:
+                brightness = 0;
+                break;
+            case PATTERN_BREATH:
+                brightness = BreathEffect(time, anim.speed);
+                break;
+            case PATTERN_BLINK_FAST:
+                brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0;
+                break;
+            case PATTERN_BLINK_SLOW:
+                brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0;
+                break;
+            case PATTERN_HEARTBEAT:
+                brightness = HeartbeatEffect(time);
+                break;
+            case PATTERN_WAVE:
+                brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            case PATTERN_COMET:
+                brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            case PATTERN_PULSE:
+                brightness = PulseEffect(time, anim.speed, 0);
+                break;
+            case PATTERN_TWINKLE:
+                brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            default:
+                brightness = 0;
+                break;
         }
         
         gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
@@ -176,106 +193,6 @@ private:
         }
     }
 
-    // ===== EYE DISPLAY FUNCTIONS =====
-    void DrawEye(int cx, int cy, int r, bool blink = false) {
-        if (!display_) return;
-        if (blink) {
-            display_->DrawLine(cx - r, cy, cx + r, cy, 1);
-        } else {
-            display_->DrawCircle(cx, cy, r, 1);
-            display_->DrawCircle(cx, cy, r / 2, 1);
-        }
-    }
-
-    void ShowEmotionEyes(const std::string& emotion) {
-        if (!display_) return;
-        display_->Clear();
-        
-        if (emotion == "happy") {
-            // Mắt cười ^^
-            for (int x = 28; x <= 52; x++) {
-                int y = 35 - ((x - 40) * (x - 40)) / 25;
-                if (y > 15 && y < 50) display_->DrawPixel(x, y, 1);
-            }
-            for (int x = 76; x <= 100; x++) {
-                int y = 35 - ((x - 88) * (x - 88)) / 25;
-                if (y > 15 && y < 50) display_->DrawPixel(x, y, 1);
-            }
-        }
-        else if (emotion == "sad") {
-            // Mắt buồn - nhìn xuống
-            DrawEye(40, 32, 8);
-            DrawEye(88, 32, 8);
-            // Lông mày cau
-            display_->DrawLine(28, 18, 52, 14, 1);
-            display_->DrawLine(76, 14, 100, 18, 1);
-        }
-        else if (emotion == "angry") {
-            // Mắt giận - lông mày cau mạnh
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawLine(28, 15, 52, 18, 1);
-            display_->DrawLine(76, 18, 100, 15, 1);
-        }
-        else if (emotion == "surprised") {
-            // Mắt ngạc nhiên - mắt to
-            display_->DrawCircle(40, 30, 12, 1);
-            display_->DrawCircle(88, 30, 12, 1);
-            display_->DrawCircle(40, 30, 4, 1);
-            display_->DrawCircle(88, 30, 4, 1);
-        }
-        else if (emotion == "sleeping") {
-            // Mắt ngủ - nhắm
-            DrawEye(40, 30, 8, true);
-            DrawEye(88, 30, 8, true);
-        }
-        else if (emotion == "love") {
-            // Mắt yêu - trái tim
-            display_->DrawCircle(36, 28, 4, 1);
-            display_->DrawCircle(44, 28, 4, 1);
-            display_->DrawLine(32, 30, 48, 30, 1);
-            display_->DrawLine(36, 33, 40, 36, 1);
-            display_->DrawLine(44, 33, 40, 36, 1);
-            
-            display_->DrawCircle(84, 28, 4, 1);
-            display_->DrawCircle(92, 28, 4, 1);
-            display_->DrawLine(80, 30, 96, 30, 1);
-            display_->DrawLine(84, 33, 88, 36, 1);
-            display_->DrawLine(92, 33, 88, 36, 1);
-        }
-        else if (emotion == "thinking") {
-            // Mắt suy nghĩ - nhìn lên
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawCircle(40, 26, 3, 1);
-            display_->DrawCircle(88, 26, 3, 1);
-        }
-        else if (emotion == "listening") {
-            // Mắt lắng nghe - nhìn sang trái
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawCircle(36, 30, 3, 1);
-            display_->DrawCircle(84, 30, 3, 1);
-        }
-        else if (emotion == "speaking") {
-            // Mắt nói - chớp mắt
-            if (eye_tick_ % 2000 < 100) {
-                DrawEye(40, 30, 8, true);
-                DrawEye(88, 30, 8, true);
-            } else {
-                DrawEye(40, 30, 8);
-                DrawEye(88, 30, 8);
-            }
-        }
-        else {
-            // Neutral - mắt bình thường
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-        }
-        
-        display_->Update();
-    }
-
     // ===== EMOTION EXECUTION =====
     void ExecuteEmotion(const std::string& emotion) {
         if (emotion == current_emotion_ && emotion_auto_mode_ == false) return;
@@ -283,9 +200,6 @@ private:
         emotion_auto_mode_ = false;
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
-        
-        // Hiển thị mắt cảm xúc
-        ShowEmotionEyes(emotion);
         
         if (emotion == "happy") {
             led_auto_mode_ = false;
@@ -428,15 +342,9 @@ private:
 
     void UpdateLedCreative() {
         led_tick_ += 50;
-        eye_tick_ += 50;
         
         if (led_tick_ % 500 == 0) {
             UpdateEmotionByState();
-        }
-        
-        // Cập nhật mắt chớp khi speaking
-        if (current_emotion_ == "speaking") {
-            ShowEmotionEyes("speaking");
         }
         
         if (led_timeout_ms_ > 0) {
@@ -696,6 +604,20 @@ private:
                 gpio_set_level(LED_2, 0);
                 return "LED tắt";
             });
+        mcp.AddTool("self.led.breath", "LED thở", PropertyList({Property("speed", kPropertyTypeInteger, 3, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_ = {PATTERN_BREATH, p["speed"].value<int>(), 255, 0, true};
+                anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+                return "LED thở";
+            });
+        mcp.AddTool("self.led.blink", "LED nhấp nháy", PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
+                anim_led2_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
+                return "LED nhấp nháy";
+            });
         mcp.AddTool("self.led.auto", "LED tự động", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
@@ -774,7 +696,6 @@ public:
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
         InitializeSsd1306Display();
-        ShowEmotionEyes("neutral");
 #endif
 
         InitializeButtons();
