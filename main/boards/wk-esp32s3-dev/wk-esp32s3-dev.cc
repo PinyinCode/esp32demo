@@ -89,6 +89,61 @@ private:
 
     friend class SensorController;
 
+    // ===== HIỂN THỊ EMOJI + TEXT =====
+    void ShowEmotionDisplay(const std::string& emotion) {
+        if (!display_) return;
+        
+        if (emotion == "happy") {
+            display_->SetEmotion("😊");
+            display_->SetStatus("Vui vẻ!");
+        }
+        else if (emotion == "sad") {
+            display_->SetEmotion("😢");
+            display_->SetStatus("Buồn...");
+        }
+        else if (emotion == "angry") {
+            display_->SetEmotion("😠");
+            display_->SetStatus("Giận dữ!");
+        }
+        else if (emotion == "surprised") {
+            display_->SetEmotion("😮");
+            display_->SetStatus("Ngạc nhiên!");
+        }
+        else if (emotion == "scared") {
+            display_->SetEmotion("😨");
+            display_->SetStatus("Sợ hãi!");
+        }
+        else if (emotion == "sleeping") {
+            display_->SetEmotion("😴");
+            display_->SetStatus("Đang ngủ...");
+        }
+        else if (emotion == "thinking") {
+            display_->SetEmotion("🤔");
+            display_->SetStatus("Đang suy nghĩ...");
+        }
+        else if (emotion == "listening") {
+            display_->SetEmotion("👂");
+            display_->SetStatus("Đang lắng nghe...");
+        }
+        else if (emotion == "speaking") {
+            display_->SetEmotion("🗣️");
+            display_->SetStatus("Đang nói...");
+        }
+        else if (emotion == "love") {
+            display_->SetEmotion("😍");
+            display_->SetStatus("Yêu thương!");
+        }
+        else if (emotion == "confused") {
+            display_->SetEmotion("😕");
+            display_->SetStatus("Bối rối?");
+        }
+        else {
+            // Neutral
+            display_->SetEmotion("😐");
+            display_->SetStatus("Sẵn sàng");
+        }
+    }
+
     // ===== LED EFFECT FUNCTIONS =====
     int BreathEffect(uint32_t time_ms, int speed) {
         float period = 2000.0f / speed;
@@ -149,36 +204,16 @@ private:
         uint32_t time = led_tick_;
         
         switch (anim.pattern) {
-            case PATTERN_OFF:
-                brightness = 0;
-                break;
-            case PATTERN_BREATH:
-                brightness = BreathEffect(time, anim.speed);
-                break;
-            case PATTERN_BLINK_FAST:
-                brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0;
-                break;
-            case PATTERN_BLINK_SLOW:
-                brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0;
-                break;
-            case PATTERN_HEARTBEAT:
-                brightness = HeartbeatEffect(time);
-                break;
-            case PATTERN_WAVE:
-                brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
-                break;
-            case PATTERN_COMET:
-                brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
-                break;
-            case PATTERN_PULSE:
-                brightness = PulseEffect(time, anim.speed, 0);
-                break;
-            case PATTERN_TWINKLE:
-                brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
-                break;
-            default:
-                brightness = 0;
-                break;
+            case PATTERN_OFF: brightness = 0; break;
+            case PATTERN_BREATH: brightness = BreathEffect(time, anim.speed); break;
+            case PATTERN_BLINK_FAST: brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0; break;
+            case PATTERN_BLINK_SLOW: brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0; break;
+            case PATTERN_HEARTBEAT: brightness = HeartbeatEffect(time); break;
+            case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+            case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+            case PATTERN_PULSE: brightness = PulseEffect(time, anim.speed, 0); break;
+            case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+            default: brightness = 0; break;
         }
         
         gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
@@ -201,6 +236,10 @@ private:
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
         
+        // Hiển thị emoji + text trên OLED
+        ShowEmotionDisplay(emotion);
+        
+        // Điều khiển LED + Motor theo cảm xúc
         if (emotion == "happy") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 5, 255, 0, true};
@@ -408,42 +447,26 @@ private:
         ledc_timer_config(&timer);
         
         ledc_channel_config_t ch1 = {
-            .gpio_num = DRV8833_IN1,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_0,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch1);
         
         ledc_channel_config_t ch2 = {
-            .gpio_num = DRV8833_IN2,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_1,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch2);
         
         ledc_channel_config_t ch3 = {
-            .gpio_num = DRV8833_IN3,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_2,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch3);
         
         ledc_channel_config_t ch4 = {
-            .gpio_num = DRV8833_IN4,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_3,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch4);
     }
@@ -604,20 +627,6 @@ private:
                 gpio_set_level(LED_2, 0);
                 return "LED tắt";
             });
-        mcp.AddTool("self.led.breath", "LED thở", PropertyList({Property("speed", kPropertyTypeInteger, 3, 1, 10)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                led_auto_mode_ = false;
-                anim_led1_ = {PATTERN_BREATH, p["speed"].value<int>(), 255, 0, true};
-                anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
-                return "LED thở";
-            });
-        mcp.AddTool("self.led.blink", "LED nhấp nháy", PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                led_auto_mode_ = false;
-                anim_led1_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
-                anim_led2_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
-                return "LED nhấp nháy";
-            });
         mcp.AddTool("self.led.auto", "LED tự động", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
@@ -696,6 +705,7 @@ public:
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
         InitializeSsd1306Display();
+        ShowEmotionDisplay("neutral");
 #endif
 
         InitializeButtons();
