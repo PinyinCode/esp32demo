@@ -23,7 +23,6 @@ private:
     bool started_ = false;
     bool mute_ = false;
     std::mutex data_if_mutex_;
-    int current_volume_ = 85;
 
     void CreateDuplexChannels();
     void UpdateDeviceState();
