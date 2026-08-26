@@ -26,6 +26,7 @@ struct LedAnimation {
 
 class LedController {
 private:
+    gpio_num_t led1_pin_, led2_pin_;
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, false};
     uint32_t led_tick_ = 0;
@@ -48,7 +49,7 @@ private:
     static void LedTask(void* arg);
     
 public:
-    LedController();
+    LedController(gpio_num_t led1_pin, gpio_num_t led2_pin);
     ~LedController();
     void Initialize();
     void InitializeMcp();
