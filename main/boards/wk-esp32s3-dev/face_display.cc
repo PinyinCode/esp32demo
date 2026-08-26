@@ -54,34 +54,34 @@ void FaceDisplay::DrawFace(const std::string& emotion) {
     display_->Clear();
     
     if (emotion == "neutral") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         display_->DrawLine(49, 45, 79, 45, 1);
     }
     else if (emotion == "happy") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         DrawMouth(64, 45, 30, 10, true);
         DrawEyebrow(40, 18, 16, 3, true);
         DrawEyebrow(88, 18, 16, 3, true);
     }
     else if (emotion == "sad") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         DrawMouth(64, 50, 30, 10, false);
         DrawEyebrow(40, 18, 16, 3, false);
         DrawEyebrow(88, 18, 16, 3, false);
     }
     else if (emotion == "angry") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         DrawMouth(64, 50, 20, 5, false);
         DrawEyebrow(40, 15, 16, 5, false);
         DrawEyebrow(88, 15, 16, 5, false);
     }
     else if (emotion == "surprised") {
-        DrawEye(40, 30, 12, false);
-        DrawEye(88, 30, 12, false);
+        DrawEye(40, 30, 12);
+        DrawEye(88, 30, 12);
         display_->DrawCircle(64, 45, 8, 1);
         DrawEyebrow(40, 15, 16, 3, true);
         DrawEyebrow(88, 15, 16, 3, true);
@@ -92,8 +92,8 @@ void FaceDisplay::DrawFace(const std::string& emotion) {
         DrawMouth(64, 45, 15, 3, true);
     }
     else if (emotion == "thinking") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         display_->DrawCircle(40, 26, 4, 1);
         display_->DrawCircle(88, 26, 4, 1);
         DrawMouth(64, 45, 20, 5, true);
@@ -101,8 +101,8 @@ void FaceDisplay::DrawFace(const std::string& emotion) {
         DrawEyebrow(88, 18, 16, 3, false);
     }
     else if (emotion == "listening") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         display_->DrawCircle(36, 30, 4, 1);
         display_->DrawCircle(84, 30, 4, 1);
         display_->DrawCircle(64, 45, 10, 1);
@@ -110,40 +110,30 @@ void FaceDisplay::DrawFace(const std::string& emotion) {
         DrawEyebrow(88, 18, 16, 3, true);
     }
     else if (emotion == "speaking") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         for (int i = 0; i < 6; i++) {
             display_->DrawCircle(64, 45, 5 + i, 1);
         }
     }
-    else if (emotion == "blink") {
-        DrawEye(40, 30, 8, true);
-        DrawEye(88, 30, 8, true);
-        DrawMouth(64, 45, 20, 5, true);
-    }
-    else if (emotion == "winking") {
-        DrawEye(40, 30, 8, true);
-        DrawEye(88, 30, 8, false);
-        DrawMouth(64, 45, 25, 8, true);
-    }
     else if (emotion == "love") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         DrawMouth(64, 45, 35, 12, true);
         display_->DrawCircle(30, 50, 3, 1);
         display_->DrawCircle(98, 50, 3, 1);
     }
     else if (emotion == "confused") {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         display_->DrawLine(49, 45, 64, 42, 1);
         display_->DrawLine(64, 42, 79, 45, 1);
         DrawEyebrow(40, 18, 16, 3, true);
         DrawEyebrow(88, 18, 16, 3, false);
     }
     else {
-        DrawEye(40, 30, 8, false);
-        DrawEye(88, 30, 8, false);
+        DrawEye(40, 30, 8);
+        DrawEye(88, 30, 8);
         display_->DrawLine(49, 45, 79, 45, 1);
     }
     
