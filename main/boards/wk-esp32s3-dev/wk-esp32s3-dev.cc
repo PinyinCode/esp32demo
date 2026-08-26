@@ -68,6 +68,16 @@ private:
                 if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_);
                 return "Âm lượng: " + std::to_string(current_volume_) + "%";
             });
+        mcp.AddTool("self.audio.mute", "Tắt tiếng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (audio_codec_) audio_codec_->SetOutputVolume(0);
+                return "Tắt tiếng";
+            });
+        mcp.AddTool("self.audio.unmute", "Bật tiếng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_);
+                return "Bật tiếng";
+            });
     }
 
     void InitializeBatteryMcp() {
@@ -94,11 +104,15 @@ public:
         InitializeAdc();
         
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
-        motor_controller_ = new MotorController();
+        // SỬA: Truyền GPIO qua constructor
+        motor_controller_ = new MotorController(
+            DRV8833_IN1, DRV8833_IN2, DRV8833_IN3, DRV8833_IN4
+        );
         motor_controller_->InitializeMcp();
 #endif
         
-        led_controller_ = new LedController();
+        // SỬA: Truyền GPIO qua constructor
+        led_controller_ = new LedController(LED_1, LED_2);
         led_controller_->Initialize();
         led_controller_->InitializeMcp();
         
