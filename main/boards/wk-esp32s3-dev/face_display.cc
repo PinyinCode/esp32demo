@@ -3,7 +3,7 @@
 
 #define TAG "FaceDisplay"
 
-FaceDisplay::FaceDisplay(Display* display) : display_(display) {
+FaceDisplay::FaceDisplay(OledDisplay* display) : display_(display) {
     ESP_LOGI(TAG, "FaceDisplay initialized");
 }
 
