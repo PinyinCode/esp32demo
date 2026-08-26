@@ -1,5 +1,5 @@
 #include "wifi_board.h"
-#include "codecs/wk_audio_codec.h"  // Thay đổi: dùng codec mới
+#include "wk_audio_codec.h"  // Thay đổi: dùng codec mới
 #include "display/lcd_display.h"
 #include "display/oled_display.h"
 #include "system_reset.h"
