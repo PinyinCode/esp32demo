@@ -7,11 +7,14 @@
 
 EmotionController::EmotionController(FaceDisplay* face, MotorController* motor, LedController* led)
     : face_display_(face), motor_controller_(motor), led_controller_(led) {
+    ESP_LOGI(TAG, "Emotion Controller initialized");
     xTaskCreate(EmotionTask, "emotion_task", 4096, this, 5, &emotion_task_handle_);
 }
 
 EmotionController::~EmotionController() {
-    if (emotion_task_handle_) vTaskDelete(emotion_task_handle_);
+    if (emotion_task_handle_) {
+        vTaskDelete(emotion_task_handle_);
+    }
 }
 
 void EmotionController::ExecuteEmotion(const std::string& emotion) {
@@ -97,6 +100,7 @@ void EmotionController::SetAutoMode(bool auto_mode) {
 
 void EmotionController::UpdateByState() {
     if (!auto_mode_) return;
+    
     auto& app = Application::GetInstance();
     auto state = app.GetDeviceState();
     std::string new_emotion = "neutral";
@@ -125,37 +129,44 @@ void EmotionController::EmotionTask(void* arg) {
 
 void EmotionController::InitializeMcp() {
     auto& mcp = McpServer::GetInstance();
+    
     mcp.AddTool("self.emotion.set", "Đặt cảm xúc",
         PropertyList({Property("emotion", kPropertyTypeString, "neutral")}),
         [this](const PropertyList& p) -> ReturnValue {
             SetEmotion(p["emotion"].value<std::string>());
             return "OK";
         });
+        
     mcp.AddTool("self.emotion.happy", "Vui vẻ", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetEmotion("happy");
             return "Vui!";
         });
+        
     mcp.AddTool("self.emotion.sad", "Buồn", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetEmotion("sad");
             return "Buồn...";
         });
+        
     mcp.AddTool("self.emotion.angry", "Giận dữ", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetEmotion("angry");
             return "Giận!";
         });
+        
     mcp.AddTool("self.emotion.scared", "Sợ hãi", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetEmotion("scared");
             return "Sợ!";
         });
+        
     mcp.AddTool("self.emotion.love", "Yêu thương", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetEmotion("love");
             return "Yêu!";
         });
+        
     mcp.AddTool("self.emotion.auto", "Tự động", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetAutoMode(true);
