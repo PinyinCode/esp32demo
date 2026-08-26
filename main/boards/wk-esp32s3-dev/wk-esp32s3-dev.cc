@@ -73,6 +73,15 @@ private:
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
 
+    // PWM variables for motor speed control
+    ledc_channel_t motor_pwm_channel_left = LEDC_CHANNEL_0;
+    ledc_channel_t motor_pwm_channel_right = LEDC_CHANNEL_1;
+    ledc_timer_t motor_pwm_timer = LEDC_TIMER_0;
+    uint32_t motor_pwm_freq_hz = 5000;  // 5kHz PWM frequency
+    uint8_t motor_pwm_resolution = LEDC_TIMER_8_BIT;  // 8-bit resolution (0-255)
+    int current_left_speed = 0;
+    int current_right_speed = 0;
+
     friend class SensorController;
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -238,10 +247,57 @@ private:
         }
     }
 
+    // ===== PWM MOTOR CONTROL FUNCTIONS =====
+    void SetMotorSpeed(int left_speed, int right_speed) {
+        // Clamp speeds to -255 to 255
+        left_speed = std::max(-255, std::min(255, left_speed));
+        right_speed = std::max(-255, std::min(255, right_speed));
+        
+        current_left_speed = left_speed;
+        current_right_speed = right_speed;
+        
+        // Control left motor
+        if (left_speed > 0) {
+            gpio_set_level(DRV8833_IN1, 1);
+            gpio_set_level(DRV8833_IN2, 0);
+            ledc_set_duty(motor_pwm_timer, motor_pwm_channel_left, left_speed);
+            ledc_update_duty(motor_pwm_timer, motor_pwm_channel_left);
+        } else if (left_speed < 0) {
+            gpio_set_level(DRV8833_IN1, 0);
+            gpio_set_level(DRV8833_IN2, 1);
+            ledc_set_duty(motor_pwm_timer, motor_pwm_channel_left, -left_speed);
+            ledc_update_duty(motor_pwm_timer, motor_pwm_channel_left);
+        } else {
+            gpio_set_level(DRV8833_IN1, 0);
+            gpio_set_level(DRV8833_IN2, 0);
+            ledc_set_duty(motor_pwm_timer, motor_pwm_channel_left, 0);
+            ledc_update_duty(motor_pwm_timer, motor_pwm_channel_left);
+        }
+        
+        // Control right motor
+        if (right_speed > 0) {
+            gpio_set_level(DRV8833_IN3, 1);
+            gpio_set_level(DRV8833_IN4, 0);
+            ledc_set_duty(motor_pwm_timer, motor_pwm_channel_right, right_speed);
+            ledc_update_duty(motor_pwm_timer, motor_pwm_channel_right);
+        } else if (right_speed < 0) {
+            gpio_set_level(DRV8833_IN3, 0);
+            gpio_set_level(DRV8833_IN4, 1);
+            ledc_set_duty(motor_pwm_timer, motor_pwm_channel_right, -right_speed);
+            ledc_update_duty(motor_pwm_timer, motor_pwm_channel_right);
+        } else {
+            gpio_set_level(DRV8833_IN3, 0);
+            gpio_set_level(DRV8833_IN4, 0);
+            ledc_set_duty(motor_pwm_timer, motor_pwm_channel_right, 0);
+            ledc_update_duty(motor_pwm_timer, motor_pwm_channel_right);
+        }
+    }
+
     // ===== ĐỘNG CƠ DRV8833 =====
     void InitializeMotor() {
-        ESP_LOGI(TAG, "Initialize Motor DRV8833");
+        ESP_LOGI(TAG, "Initialize Motor DRV8833 with PWM");
         
+        // Configure GPIO pins
         gpio_config_t io_conf = {
             .pin_bit_mask = (1ULL << DRV8833_IN1) | (1ULL << DRV8833_IN2) | 
                             (1ULL << DRV8833_IN3) | (1ULL << DRV8833_IN4),
@@ -252,10 +308,44 @@ private:
         };
         gpio_config(&io_conf);
         
+        // Initialize PWM for motor speed control
+        ledc_timer_config_t timer_conf = {
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .duty_resolution = motor_pwm_resolution,
+            .timer_num = motor_pwm_timer,
+            .freq_hz = motor_pwm_freq_hz,
+            .clk_cfg = LEDC_AUTO_CLK
+        };
+        ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
+        
+        ledc_channel_config_t channel_conf_left = {
+            .gpio_num = DRV8833_IN1,  // Use IN1 as PWM pin
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = motor_pwm_channel_left,
+            .intr_type = LEDC_INTR_DISABLE,
+            .timer_sel = motor_pwm_timer,
+            .duty = 0,
+            .hpoint = 0
+        };
+        ESP_ERROR_CHECK(ledc_channel_config(&channel_conf_left));
+        
+        ledc_channel_config_t channel_conf_right = {
+            .gpio_num = DRV8833_IN3,  // Use IN3 as PWM pin
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = motor_pwm_channel_right,
+            .intr_type = LEDC_INTR_DISABLE,
+            .timer_sel = motor_pwm_timer,
+            .duty = 0,
+            .hpoint = 0
+        };
+        ESP_ERROR_CHECK(ledc_channel_config(&channel_conf_right));
+        
+        // Initial state: motors stopped
         gpio_set_level(DRV8833_IN1, 0);
         gpio_set_level(DRV8833_IN2, 0);
         gpio_set_level(DRV8833_IN3, 0);
         gpio_set_level(DRV8833_IN4, 0);
+        SetMotorSpeed(0, 0);
     }
 
     // ===== PIR =====
@@ -308,88 +398,85 @@ private:
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         
-        mcp.AddTool("self.motor.left", "Điều khiển động cơ trái",
+        mcp.AddTool("self.motor.left", "Điều khiển động cơ trái với tốc độ",
             PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
-            [](const PropertyList& p) -> ReturnValue {
+            [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
-                if (speed > 0) {
-                    gpio_set_level(DRV8833_IN1, 1);
-                    gpio_set_level(DRV8833_IN2, 0);
-                } else if (speed < 0) {
-                    gpio_set_level(DRV8833_IN1, 0);
-                    gpio_set_level(DRV8833_IN2, 1);
-                } else {
-                    gpio_set_level(DRV8833_IN1, 0);
-                    gpio_set_level(DRV8833_IN2, 0);
-                }
-                return true;
+                SetMotorSpeed(speed, current_right_speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Đã đặt tốc độ động cơ trái: %d", speed);
+                return std::string(result);
             });
             
-        mcp.AddTool("self.motor.right", "Điều khiển động cơ phải",
+        mcp.AddTool("self.motor.right", "Điều khiển động cơ phải với tốc độ",
             PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
-            [](const PropertyList& p) -> ReturnValue {
+            [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
-                if (speed > 0) {
-                    gpio_set_level(DRV8833_IN3, 1);
-                    gpio_set_level(DRV8833_IN4, 0);
-                } else if (speed < 0) {
-                    gpio_set_level(DRV8833_IN3, 0);
-                    gpio_set_level(DRV8833_IN4, 1);
-                } else {
-                    gpio_set_level(DRV8833_IN3, 0);
-                    gpio_set_level(DRV8833_IN4, 0);
-                }
-                return true;
+                SetMotorSpeed(current_left_speed, speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Đã đặt tốc độ động cơ phải: %d", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
             PropertyList(),
-            [](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(DRV8833_IN1, 0);
-                gpio_set_level(DRV8833_IN2, 0);
-                gpio_set_level(DRV8833_IN3, 0);
-                gpio_set_level(DRV8833_IN4, 0);
+            [this](const PropertyList& p) -> ReturnValue {
+                SetMotorSpeed(0, 0);
                 return "Đã dừng động cơ";
             });
             
         mcp.AddTool("self.motor.forward", "Robot tiến về phía trước",
-            PropertyList(),
-            [](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(DRV8833_IN1, 1);
-                gpio_set_level(DRV8833_IN2, 0);
-                gpio_set_level(DRV8833_IN3, 1);
-                gpio_set_level(DRV8833_IN4, 0);
-                return "Robot đang tiến";
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, 1, 255)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                if (speed < 1) speed = 200;  // Default speed
+                SetMotorSpeed(speed, speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Robot đang tiến với tốc độ: %d", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.backward", "Robot lùi về phía sau",
-            PropertyList(),
-            [](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(DRV8833_IN1, 0);
-                gpio_set_level(DRV8833_IN2, 1);
-                gpio_set_level(DRV8833_IN3, 0);
-                gpio_set_level(DRV8833_IN4, 1);
-                return "Robot đang lùi";
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, 1, 255)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                if (speed < 1) speed = 200;
+                SetMotorSpeed(-speed, -speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Robot đang lùi với tốc độ: %d", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.turn_left", "Robot rẽ trái",
-            PropertyList(),
-            [](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(DRV8833_IN1, 0);
-                gpio_set_level(DRV8833_IN2, 1);
-                gpio_set_level(DRV8833_IN3, 1);
-                gpio_set_level(DRV8833_IN4, 0);
-                return "Robot đang rẽ trái";
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, 1, 255)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                if (speed < 1) speed = 200;
+                SetMotorSpeed(-speed, speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Robot đang rẽ trái với tốc độ: %d", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.turn_right", "Robot rẽ phải",
-            PropertyList(),
-            [](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(DRV8833_IN1, 1);
-                gpio_set_level(DRV8833_IN2, 0);
-                gpio_set_level(DRV8833_IN3, 0);
-                gpio_set_level(DRV8833_IN4, 1);
-                return "Robot đang rẽ phải";
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, 1, 255)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                if (speed < 1) speed = 200;
+                SetMotorSpeed(speed, -speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Robot đang rẽ phải với tốc độ: %d", speed);
+                return std::string(result);
+            });
+            
+        mcp.AddTool("self.motor.speed", "Đặt tốc độ cho cả 2 động cơ",
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int speed = p["speed"].value<int>();
+                SetMotorSpeed(speed, speed);
+                char result[64];
+                snprintf(result, sizeof(result), "Đã đặt tốc độ động cơ: %d", speed);
+                return std::string(result);
             });
     }
 
