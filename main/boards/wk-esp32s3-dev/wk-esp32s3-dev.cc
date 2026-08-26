@@ -26,6 +26,7 @@
 #include <math.h>
 #include <algorithm>
 #include <string>
+#include <lvgl.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -61,7 +62,7 @@ struct LedAnimation {
 class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
-    Display* display_ = nullptr;
+    OledDisplay* display_ = nullptr;
     i2c_master_bus_handle_t display_i2c_bus_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
@@ -87,10 +88,158 @@ private:
     std::string current_emotion_ = "neutral";
     bool emotion_auto_mode_ = true;
 
-    // Eye animation
-    uint32_t eye_tick_ = 0;
+    // LVGL eye objects
+    lv_obj_t* eye_container_ = nullptr;
 
     friend class SensorController;
+
+    // ===== VẼ MẮT BẰNG LVGL =====
+    void DrawEyeLvgl(lv_obj_t* parent, int cx, int cy, int radius, bool blink = false) {
+        static lv_color_t cbuf[LV_CANVAS_BUF_SIZE_TRUE_COLOR(32, 32)];
+        lv_obj_t* canvas = lv_canvas_create(parent);
+        lv_canvas_set_buffer(canvas, cbuf, 32, 32, LV_IMG_CF_TRUE_COLOR);
+        lv_canvas_fill_bg(canvas, lv_color_white(), LV_OPA_COVER);
+        
+        lv_draw_rect_dsc_t rect_dsc;
+        lv_draw_rect_dsc_init(&rect_dsc);
+        rect_dsc.bg_color = lv_color_black();
+        
+        if (blink) {
+            rect_dsc.radius = 2;
+            lv_canvas_draw_rect(canvas, 16 - radius, 15, radius * 2, 3, &rect_dsc);
+        } else {
+            rect_dsc.radius = radius;
+            lv_canvas_draw_rect(canvas, 16 - radius, 16 - radius, radius * 2, radius * 2, &rect_dsc);
+            
+            rect_dsc.bg_color = lv_color_white();
+            rect_dsc.radius = radius / 2;
+            lv_canvas_draw_rect(canvas, 16 - radius/2, 16 - radius/2, radius, radius, &rect_dsc);
+        }
+        
+        lv_obj_set_pos(canvas, cx - 16, cy - 16);
+    }
+
+    void ShowEmotionEyesLvgl(const std::string& emotion) {
+        if (!display_) return;
+        
+        lv_obj_t* scr = lv_scr_act();
+        
+        if (eye_container_) {
+            lv_obj_del(eye_container_);
+            eye_container_ = nullptr;
+        }
+        
+        eye_container_ = lv_obj_create(scr);
+        lv_obj_set_size(eye_container_, 128, 64);
+        lv_obj_set_pos(eye_container_, 0, 0);
+        lv_obj_set_style_bg_color(eye_container_, lv_color_white(), 0);
+        lv_obj_set_style_border_width(eye_container_, 0, 0);
+        lv_obj_set_style_pad_all(eye_container_, 0, 0);
+        
+        if (emotion == "happy") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+        }
+        else if (emotion == "sad") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+            
+            lv_obj_t* brow = lv_obj_create(eye_container_);
+            lv_obj_set_size(brow, 30, 3);
+            lv_obj_set_pos(brow, 25, 15);
+            lv_obj_set_style_bg_color(brow, lv_color_black(), 0);
+            lv_obj_set_style_radius(brow, 2, 0);
+            
+            lv_obj_t* brow2 = lv_obj_create(eye_container_);
+            lv_obj_set_size(brow2, 30, 3);
+            lv_obj_set_pos(brow2, 73, 15);
+            lv_obj_set_style_bg_color(brow2, lv_color_black(), 0);
+            lv_obj_set_style_radius(brow2, 2, 0);
+        }
+        else if (emotion == "angry") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+            
+            lv_obj_t* brow = lv_obj_create(eye_container_);
+            lv_obj_set_size(brow, 30, 3);
+            lv_obj_set_pos(brow, 25, 18);
+            lv_obj_set_style_bg_color(brow, lv_color_black(), 0);
+            lv_obj_set_style_radius(brow, 2, 0);
+            
+            lv_obj_t* brow2 = lv_obj_create(eye_container_);
+            lv_obj_set_size(brow2, 30, 3);
+            lv_obj_set_pos(brow2, 73, 18);
+            lv_obj_set_style_bg_color(brow2, lv_color_black(), 0);
+            lv_obj_set_style_radius(brow2, 2, 0);
+        }
+        else if (emotion == "surprised") {
+            DrawEyeLvgl(eye_container_, 40, 32, 12);
+            DrawEyeLvgl(eye_container_, 88, 32, 12);
+        }
+        else if (emotion == "sleeping") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8, true);
+            DrawEyeLvgl(eye_container_, 88, 32, 8, true);
+        }
+        else if (emotion == "love") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+            
+            lv_obj_t* heart = lv_label_create(eye_container_);
+            lv_label_set_text(heart, "❤");
+            lv_obj_set_pos(heart, 28, 45);
+            lv_obj_set_style_text_color(heart, lv_color_black(), 0);
+            
+            lv_obj_t* heart2 = lv_label_create(eye_container_);
+            lv_label_set_text(heart2, "❤");
+            lv_obj_set_pos(heart2, 78, 45);
+            lv_obj_set_style_text_color(heart2, lv_color_black(), 0);
+        }
+        else if (emotion == "thinking") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+            
+            lv_obj_t* pupil = lv_obj_create(eye_container_);
+            lv_obj_set_size(pupil, 4, 4);
+            lv_obj_set_pos(pupil, 38, 24);
+            lv_obj_set_style_bg_color(pupil, lv_color_white(), 0);
+            lv_obj_set_style_radius(pupil, 2, 0);
+            
+            lv_obj_t* pupil2 = lv_obj_create(eye_container_);
+            lv_obj_set_size(pupil2, 4, 4);
+            lv_obj_set_pos(pupil2, 86, 24);
+            lv_obj_set_style_bg_color(pupil2, lv_color_white(), 0);
+            lv_obj_set_style_radius(pupil2, 2, 0);
+        }
+        else if (emotion == "listening") {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+            
+            lv_obj_t* pupil = lv_obj_create(eye_container_);
+            lv_obj_set_size(pupil, 4, 4);
+            lv_obj_set_pos(pupil, 34, 30);
+            lv_obj_set_style_bg_color(pupil, lv_color_white(), 0);
+            lv_obj_set_style_radius(pupil, 2, 0);
+            
+            lv_obj_t* pupil2 = lv_obj_create(eye_container_);
+            lv_obj_set_size(pupil2, 4, 4);
+            lv_obj_set_pos(pupil2, 82, 30);
+            lv_obj_set_style_bg_color(pupil2, lv_color_white(), 0);
+            lv_obj_set_style_radius(pupil2, 2, 0);
+        }
+        else if (emotion == "speaking") {
+            if (led_tick_ % 2000 < 100) {
+                DrawEyeLvgl(eye_container_, 40, 32, 8, true);
+                DrawEyeLvgl(eye_container_, 88, 32, 8, true);
+            } else {
+                DrawEyeLvgl(eye_container_, 40, 32, 8);
+                DrawEyeLvgl(eye_container_, 88, 32, 8);
+            }
+        }
+        else {
+            DrawEyeLvgl(eye_container_, 40, 32, 8);
+            DrawEyeLvgl(eye_container_, 88, 32, 8);
+        }
+    }
 
     // ===== LED EFFECT FUNCTIONS =====
     int BreathEffect(uint32_t time_ms, int speed) {
@@ -176,106 +325,6 @@ private:
         }
     }
 
-    // ===== EYE DISPLAY FUNCTIONS =====
-    void DrawEye(int cx, int cy, int r, bool blink = false) {
-        if (!display_) return;
-        if (blink) {
-            display_->DrawLine(cx - r, cy, cx + r, cy, 1);
-        } else {
-            display_->DrawCircle(cx, cy, r, 1);
-            display_->DrawCircle(cx, cy, r / 2, 1);
-        }
-    }
-
-    void ShowEmotionEyes(const std::string& emotion) {
-        if (!display_) return;
-        display_->Clear();
-        
-        if (emotion == "happy") {
-            // Mắt cười ^^
-            for (int x = 28; x <= 52; x++) {
-                int y = 35 - ((x - 40) * (x - 40)) / 25;
-                if (y > 15 && y < 50) display_->DrawPixel(x, y, 1);
-            }
-            for (int x = 76; x <= 100; x++) {
-                int y = 35 - ((x - 88) * (x - 88)) / 25;
-                if (y > 15 && y < 50) display_->DrawPixel(x, y, 1);
-            }
-        }
-        else if (emotion == "sad") {
-            // Mắt buồn - nhìn xuống
-            DrawEye(40, 32, 8);
-            DrawEye(88, 32, 8);
-            // Lông mày cau
-            display_->DrawLine(28, 18, 52, 14, 1);
-            display_->DrawLine(76, 14, 100, 18, 1);
-        }
-        else if (emotion == "angry") {
-            // Mắt giận - lông mày cau mạnh
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawLine(28, 15, 52, 18, 1);
-            display_->DrawLine(76, 18, 100, 15, 1);
-        }
-        else if (emotion == "surprised") {
-            // Mắt ngạc nhiên - mắt to
-            display_->DrawCircle(40, 30, 12, 1);
-            display_->DrawCircle(88, 30, 12, 1);
-            display_->DrawCircle(40, 30, 4, 1);
-            display_->DrawCircle(88, 30, 4, 1);
-        }
-        else if (emotion == "sleeping") {
-            // Mắt ngủ - nhắm
-            DrawEye(40, 30, 8, true);
-            DrawEye(88, 30, 8, true);
-        }
-        else if (emotion == "love") {
-            // Mắt yêu - trái tim
-            display_->DrawCircle(36, 28, 4, 1);
-            display_->DrawCircle(44, 28, 4, 1);
-            display_->DrawLine(32, 30, 48, 30, 1);
-            display_->DrawLine(36, 33, 40, 36, 1);
-            display_->DrawLine(44, 33, 40, 36, 1);
-            
-            display_->DrawCircle(84, 28, 4, 1);
-            display_->DrawCircle(92, 28, 4, 1);
-            display_->DrawLine(80, 30, 96, 30, 1);
-            display_->DrawLine(84, 33, 88, 36, 1);
-            display_->DrawLine(92, 33, 88, 36, 1);
-        }
-        else if (emotion == "thinking") {
-            // Mắt suy nghĩ - nhìn lên
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawCircle(40, 26, 3, 1);
-            display_->DrawCircle(88, 26, 3, 1);
-        }
-        else if (emotion == "listening") {
-            // Mắt lắng nghe - nhìn sang trái
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-            display_->DrawCircle(36, 30, 3, 1);
-            display_->DrawCircle(84, 30, 3, 1);
-        }
-        else if (emotion == "speaking") {
-            // Mắt nói - chớp mắt
-            if (eye_tick_ % 2000 < 100) {
-                DrawEye(40, 30, 8, true);
-                DrawEye(88, 30, 8, true);
-            } else {
-                DrawEye(40, 30, 8);
-                DrawEye(88, 30, 8);
-            }
-        }
-        else {
-            // Neutral - mắt bình thường
-            DrawEye(40, 30, 8);
-            DrawEye(88, 30, 8);
-        }
-        
-        display_->Update();
-    }
-
     // ===== EMOTION EXECUTION =====
     void ExecuteEmotion(const std::string& emotion) {
         if (emotion == current_emotion_ && emotion_auto_mode_ == false) return;
@@ -284,8 +333,8 @@ private:
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
         
-        // Hiển thị mắt cảm xúc
-        ShowEmotionEyes(emotion);
+        // Hiển thị mắt LVGL
+        ShowEmotionEyesLvgl(emotion);
         
         if (emotion == "happy") {
             led_auto_mode_ = false;
@@ -428,7 +477,6 @@ private:
 
     void UpdateLedCreative() {
         led_tick_ += 50;
-        eye_tick_ += 50;
         
         if (led_tick_ % 500 == 0) {
             UpdateEmotionByState();
@@ -436,7 +484,7 @@ private:
         
         // Cập nhật mắt chớp khi speaking
         if (current_emotion_ == "speaking") {
-            ShowEmotionEyes("speaking");
+            ShowEmotionEyesLvgl("speaking");
         }
         
         if (led_timeout_ms_ > 0) {
@@ -500,42 +548,26 @@ private:
         ledc_timer_config(&timer);
         
         ledc_channel_config_t ch1 = {
-            .gpio_num = DRV8833_IN1,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_0,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch1);
         
         ledc_channel_config_t ch2 = {
-            .gpio_num = DRV8833_IN2,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_1,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch2);
         
         ledc_channel_config_t ch3 = {
-            .gpio_num = DRV8833_IN3,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_2,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch3);
         
         ledc_channel_config_t ch4 = {
-            .gpio_num = DRV8833_IN4,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_3,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
+            .gpio_num = DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
         };
         ledc_channel_config(&ch4);
     }
@@ -774,7 +806,7 @@ public:
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
         InitializeSsd1306Display();
-        ShowEmotionEyes("neutral");
+        ShowEmotionEyesLvgl("neutral");
 #endif
 
         InitializeButtons();
