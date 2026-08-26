@@ -24,7 +24,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
-#include "audio_codec.h"
 
 #define TAG "WkEsp32s3Dev"
 
@@ -181,12 +180,14 @@ private:
     
     switch (state) {
         case kDeviceStateIdle:
+            // 🌙 IDLE: LED 1 thở chậm, LED 2 tắt
             anim_led1_.pattern = PATTERN_BREATH;
             anim_led1_.speed = 3;
             anim_led2_.pattern = PATTERN_OFF;
             break;
             
         case kDeviceStateConnecting:
+            // 📡 CONNECTING: cả 2 LED xung nhịp
             anim_led1_.pattern = PATTERN_PULSE;
             anim_led1_.speed = 8;
             anim_led2_.pattern = PATTERN_PULSE;
@@ -194,6 +195,7 @@ private:
             break;
             
         case kDeviceStateListening:
+            // 🎤 LISTENING: LED 1 nhấp nháy nhanh, LED 2 sóng
             anim_led1_.pattern = PATTERN_BLINK_FAST;
             anim_led1_.speed = 10;
             anim_led2_.pattern = PATTERN_WAVE;
@@ -201,6 +203,7 @@ private:
             break;
             
         case kDeviceStateSpeaking:
+            // 💬 SPEAKING: LED 1 nhịp tim, LED 2 thở
             anim_led1_.pattern = PATTERN_HEARTBEAT;
             anim_led1_.speed = 5;
             anim_led2_.pattern = PATTERN_BREATH;
@@ -208,6 +211,7 @@ private:
             break;
             
         case kDeviceStateStarting:
+            // 🚀 STARTING: LED 1 + LED 2 nhấp nháy chậm
             anim_led1_.pattern = PATTERN_BLINK_SLOW;
             anim_led1_.speed = 5;
             anim_led2_.pattern = PATTERN_BLINK_SLOW;
@@ -215,6 +219,7 @@ private:
             break;
             
         default:
+            // ❌ UNKNOWN: cả 2 LED nhấp nháy nhanh (báo lỗi)
             anim_led1_.pattern = PATTERN_BLINK_FAST;
             anim_led1_.speed = 12;
             anim_led2_.pattern = PATTERN_BLINK_FAST;
@@ -233,117 +238,24 @@ private:
         }
     }
 
-    // ===== ĐỘNG CƠ DRV8833 VỚI PWM (ĐIỀU KHIỂN TỐC ĐỘ) =====
+    // ===== ĐỘNG CƠ DRV8833 =====
     void InitializeMotor() {
-        ESP_LOGI(TAG, "Initialize Motor DRV8833 with PWM");
+        ESP_LOGI(TAG, "Initialize Motor DRV8833");
         
-        // Cấu hình LEDC Timer
-        ledc_timer_config_t timer = {
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .duty_resolution = LEDC_TIMER_10_BIT,
-            .timer_num = LEDC_TIMER_0,
-            .freq_hz = 1000,
-            .clk_cfg = LEDC_AUTO_CLK
+        gpio_config_t io_conf = {
+            .pin_bit_mask = (1ULL << DRV8833_IN1) | (1ULL << DRV8833_IN2) | 
+                            (1ULL << DRV8833_IN3) | (1ULL << DRV8833_IN4),
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
         };
-        ledc_timer_config(&timer);
+        gpio_config(&io_conf);
         
-        // Cấu hình kênh PWM cho IN1 (Motor trái)
-        ledc_channel_config_t ch1 = {
-            .gpio_num = DRV8833_IN1,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_0,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
-        };
-        ledc_channel_config(&ch1);
-        
-        // Cấu hình kênh PWM cho IN2 (Motor trái)
-        ledc_channel_config_t ch2 = {
-            .gpio_num = DRV8833_IN2,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_1,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
-        };
-        ledc_channel_config(&ch2);
-        
-        // Cấu hình kênh PWM cho IN3 (Motor phải)
-        ledc_channel_config_t ch3 = {
-            .gpio_num = DRV8833_IN3,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_2,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
-        };
-        ledc_channel_config(&ch3);
-        
-        // Cấu hình kênh PWM cho IN4 (Motor phải)
-        ledc_channel_config_t ch4 = {
-            .gpio_num = DRV8833_IN4,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_3,
-            .timer_sel = LEDC_TIMER_0,
-            .duty = 0,
-            .hpoint = 0
-        };
-        ledc_channel_config(&ch4);
-        
-        ESP_LOGI(TAG, "Motor initialized with PWM");
-    }
-    
-    // Hàm điều khiển động cơ trái với tốc độ (-100 đến 100)
-    void SetLeftMotor(int speed) {
-        speed = std::max(-100, std::min(100, speed));
-        int duty = (abs(speed) * 1023) / 100;
-        
-        if (speed > 0) {
-            // Quay thuận
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
-        } else if (speed < 0) {
-            // Quay ngược
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, duty);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
-        } else {
-            // Dừng
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
-        }
-    }
-    
-    // Hàm điều khiển động cơ phải với tốc độ (-100 đến 100)
-    void SetRightMotor(int speed) {
-        speed = std::max(-100, std::min(100, speed));
-        int duty = (abs(speed) * 1023) / 100;
-        
-        if (speed > 0) {
-            // Quay thuận
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, duty);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
-        } else if (speed < 0) {
-            // Quay ngược
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, duty);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
-        } else {
-            // Dừng
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3, 0);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_3);
-        }
+        gpio_set_level(DRV8833_IN1, 0);
+        gpio_set_level(DRV8833_IN2, 0);
+        gpio_set_level(DRV8833_IN3, 0);
+        gpio_set_level(DRV8833_IN4, 0);
     }
 
     // ===== PIR =====
@@ -392,75 +304,92 @@ private:
         ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
     }
 
-    // ===== MCP: ĐỘNG CƠ (CÓ TỐC ĐỘ) =====
+    // ===== MCP: ĐỘNG CƠ =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         
-        // Điều khiển động cơ trái với tốc độ
-        mcp.AddTool("self.motor.left", "Điều khiển động cơ trái với tốc độ (speed: -100 đến 100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
+        mcp.AddTool("self.motor.left", "Điều khiển động cơ trái",
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
+            [](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
-                SetLeftMotor(speed);
-                return "Motor trái: " + std::to_string(speed) + "%";
+                if (speed > 0) {
+                    gpio_set_level(DRV8833_IN1, 1);
+                    gpio_set_level(DRV8833_IN2, 0);
+                } else if (speed < 0) {
+                    gpio_set_level(DRV8833_IN1, 0);
+                    gpio_set_level(DRV8833_IN2, 1);
+                } else {
+                    gpio_set_level(DRV8833_IN1, 0);
+                    gpio_set_level(DRV8833_IN2, 0);
+                }
+                return true;
             });
             
-        // Điều khiển động cơ phải với tốc độ
-        mcp.AddTool("self.motor.right", "Điều khiển động cơ phải với tốc độ (speed: -100 đến 100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
+        mcp.AddTool("self.motor.right", "Điều khiển động cơ phải",
+            PropertyList({Property("speed", kPropertyTypeInteger, 0, -255, 255)}),
+            [](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
-                SetRightMotor(speed);
-                return "Motor phải: " + std::to_string(speed) + "%";
+                if (speed > 0) {
+                    gpio_set_level(DRV8833_IN3, 1);
+                    gpio_set_level(DRV8833_IN4, 0);
+                } else if (speed < 0) {
+                    gpio_set_level(DRV8833_IN3, 0);
+                    gpio_set_level(DRV8833_IN4, 1);
+                } else {
+                    gpio_set_level(DRV8833_IN3, 0);
+                    gpio_set_level(DRV8833_IN4, 0);
+                }
+                return true;
             });
             
-        // Dừng tất cả động cơ
         mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
             PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                SetLeftMotor(0);
-                SetRightMotor(0);
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 0);
+                gpio_set_level(DRV8833_IN2, 0);
+                gpio_set_level(DRV8833_IN3, 0);
+                gpio_set_level(DRV8833_IN4, 0);
                 return "Đã dừng động cơ";
             });
             
-        // Robot tiến với tốc độ
-        mcp.AddTool("self.motor.forward", "Robot tiến về phía trước với tốc độ (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
-                SetLeftMotor(speed);
-                SetRightMotor(speed);
-                return "Robot tiến với tốc độ " + std::to_string(speed) + "%";
+        mcp.AddTool("self.motor.forward", "Robot tiến về phía trước",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 1);
+                gpio_set_level(DRV8833_IN2, 0);
+                gpio_set_level(DRV8833_IN3, 1);
+                gpio_set_level(DRV8833_IN4, 0);
+                return "Robot đang tiến";
             });
             
-        // Robot lùi với tốc độ
-        mcp.AddTool("self.motor.backward", "Robot lùi về phía sau với tốc độ (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int speed = -p["speed"].value<int>();
-                SetLeftMotor(speed);
-                SetRightMotor(speed);
-                return "Robot lùi với tốc độ " + std::to_string(-speed) + "%";
+        mcp.AddTool("self.motor.backward", "Robot lùi về phía sau",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 0);
+                gpio_set_level(DRV8833_IN2, 1);
+                gpio_set_level(DRV8833_IN3, 0);
+                gpio_set_level(DRV8833_IN4, 1);
+                return "Robot đang lùi";
             });
             
-        // Robot rẽ trái với tốc độ
-        mcp.AddTool("self.motor.turn_left", "Robot rẽ trái với tốc độ (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
-                SetLeftMotor(-speed);
-                SetRightMotor(speed);
-                return "Robot rẽ trái với tốc độ " + std::to_string(speed) + "%";
+        mcp.AddTool("self.motor.turn_left", "Robot rẽ trái",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 0);
+                gpio_set_level(DRV8833_IN2, 1);
+                gpio_set_level(DRV8833_IN3, 1);
+                gpio_set_level(DRV8833_IN4, 0);
+                return "Robot đang rẽ trái";
             });
             
-        // Robot rẽ phải với tốc độ
-        mcp.AddTool("self.motor.turn_right", "Robot rẽ phải với tốc độ (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
-                SetLeftMotor(speed);
-                SetRightMotor(-speed);
-                return "Robot rẽ phải với tốc độ " + std::to_string(speed) + "%";
+        mcp.AddTool("self.motor.turn_right", "Robot rẽ phải",
+            PropertyList(),
+            [](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(DRV8833_IN1, 1);
+                gpio_set_level(DRV8833_IN2, 0);
+                gpio_set_level(DRV8833_IN3, 0);
+                gpio_set_level(DRV8833_IN4, 1);
+                return "Robot đang rẽ phải";
             });
     }
 
@@ -554,6 +483,7 @@ public:
         InitializeAdc();
         InitializeBatteryMcp();
 
+        // Start creative LED task (replaces old LedStateTask)
         anim_led1_.active = true;
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 4096, this, 5, nullptr);
@@ -625,20 +555,7 @@ public:
     }
 
     void InitializeTools() {
-        // Set audio volume and play test sound
-        auto& app = Application::GetInstance();
-        auto* audio = app.GetAudio();
-        if (audio) {
-            // Set volume to 80%
-            audio->SetOutputVolume(80);
-            ESP_LOGI(TAG, "Audio volume set to 80%");
-            
-            // Play test sound 1kHz for 200ms
-            audio->PlayTone(1000, 200);
-            ESP_LOGI(TAG, "Test sound played!");
-        } else {
-            ESP_LOGW(TAG, "Audio not available!");
-        }
+        // Keep tools
     }
 
     virtual Led* GetLed() override {
