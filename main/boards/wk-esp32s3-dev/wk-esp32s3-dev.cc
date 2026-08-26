@@ -24,6 +24,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
+#include <algorithm>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -67,14 +68,19 @@ private:
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
-    AudioCodec* audio_codec_ = nullptr;  // THÊM: Lưu trữ audio codec
-    int current_volume_ = 80;            // THÊM: Lưu âm lượng hiện tại
+    AudioCodec* audio_codec_ = nullptr;
+    int current_volume_ = 80;
 
     // LED animation variables
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
-    bool led_auto_mode_ = true;          // THÊM: LED tự động theo trạng thái
+    bool led_auto_mode_ = true;
+    
+    // LED timeout
+    uint32_t led_timeout_ms_ = 0;
+    uint32_t led_timeout_start_ = 0;
+    const int DEFAULT_LED_DURATION_ = 30;  // Mặc định 30 giây
 
     friend class SensorController;
 
@@ -179,10 +185,32 @@ private:
         }
     }
 
+    void SetLedTimeout(int duration_seconds) {
+        if (duration_seconds <= 0) {
+            led_timeout_ms_ = 0;  // Không timeout (vĩnh viễn)
+        } else {
+            led_timeout_ms_ = duration_seconds * 1000;
+            led_timeout_start_ = led_tick_;
+        }
+    }
+
     void UpdateLedCreative() {
         led_tick_ += 50;
         
+        // Kiểm tra timeout
+        if (led_timeout_ms_ > 0) {
+            if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
+                // Hết thời gian, quay lại chế độ tự động
+                led_timeout_ms_ = 0;
+                led_auto_mode_ = true;
+                anim_led1_.active = true;
+                anim_led2_.active = true;
+                ESP_LOGI(TAG, "LED timeout, trở về chế độ tự động");
+            }
+        }
+        
         if (led_auto_mode_) {
+            // Tự động theo trạng thái AI
             auto& app = Application::GetInstance();
             auto state = app.GetDeviceState();
             
@@ -190,37 +218,49 @@ private:
                 case kDeviceStateIdle:
                     anim_led1_.pattern = PATTERN_BREATH;
                     anim_led1_.speed = 3;
+                    anim_led1_.active = true;
                     anim_led2_.pattern = PATTERN_OFF;
+                    anim_led2_.active = false;
                     break;
                 case kDeviceStateConnecting:
                     anim_led1_.pattern = PATTERN_PULSE;
                     anim_led1_.speed = 8;
+                    anim_led1_.active = true;
                     anim_led2_.pattern = PATTERN_PULSE;
                     anim_led2_.speed = 8;
+                    anim_led2_.active = true;
                     break;
                 case kDeviceStateListening:
                     anim_led1_.pattern = PATTERN_BLINK_FAST;
                     anim_led1_.speed = 10;
+                    anim_led1_.active = true;
                     anim_led2_.pattern = PATTERN_WAVE;
                     anim_led2_.speed = 7;
+                    anim_led2_.active = true;
                     break;
                 case kDeviceStateSpeaking:
                     anim_led1_.pattern = PATTERN_HEARTBEAT;
                     anim_led1_.speed = 5;
+                    anim_led1_.active = true;
                     anim_led2_.pattern = PATTERN_BREATH;
                     anim_led2_.speed = 4;
+                    anim_led2_.active = true;
                     break;
                 case kDeviceStateStarting:
                     anim_led1_.pattern = PATTERN_BLINK_SLOW;
                     anim_led1_.speed = 5;
+                    anim_led1_.active = true;
                     anim_led2_.pattern = PATTERN_BLINK_SLOW;
                     anim_led2_.speed = 5;
+                    anim_led2_.active = true;
                     break;
                 default:
                     anim_led1_.pattern = PATTERN_BLINK_FAST;
                     anim_led1_.speed = 12;
+                    anim_led1_.active = true;
                     anim_led2_.pattern = PATTERN_BLINK_FAST;
                     anim_led2_.speed = 12;
+                    anim_led2_.active = true;
                     break;
             }
         }
@@ -237,7 +277,7 @@ private:
         }
     }
 
-    // ===== ĐỘNG CƠ DRV8833 với PWM =====
+    // ===== ĐỘNG CƠ DRV8833 =====
     void InitializeMotor() {
         ESP_LOGI(TAG, "Initialize Motor DRV8833 with PWM");
         
@@ -379,7 +419,7 @@ private:
         ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
     }
 
-    // ===== MCP: MOTOR với PWM =====
+    // ===== MCP: MOTOR =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         
@@ -498,66 +538,164 @@ private:
             });
     }
 
+    // ===== MCP: LED BASIC =====
+    void InitializeLedMcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.led.on", "Bật LED 1 (duration: -1=vĩnh viễn, 0=mặc định 30s, >0=số giây)",
+            PropertyList({Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                int duration = p["duration"].value<int>();
+                anim_led1_.active = false;
+                
+                if (duration == -1) {
+                    // Vĩnh viễn
+                    SetLedTimeout(0);
+                    gpio_set_level(LED_1, 1);
+                    return "LED 1 bật vĩnh viễn";
+                } else if (duration == 0) {
+                    duration = DEFAULT_LED_DURATION_;
+                }
+                
+                gpio_set_level(LED_1, 1);
+                SetLedTimeout(duration);
+                return "LED 1 bật trong " + std::to_string(duration) + " giây";
+            });
+            
+        mcp.AddTool("self.led.off", "Tắt LED 1",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = true;
+                led_timeout_ms_ = 0;
+                gpio_set_level(LED_1, 0);
+                return "Đã tắt LED 1";
+            });
+            
+        mcp.AddTool("self.led2.on", "Bật LED 2 (duration: -1=vĩnh viễn, 0=mặc định 30s, >0=số giây)",
+            PropertyList({Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                int duration = p["duration"].value<int>();
+                anim_led2_.active = false;
+                
+                if (duration == -1) {
+                    SetLedTimeout(0);
+                    gpio_set_level(LED_2, 1);
+                    return "LED 2 bật vĩnh viễn";
+                } else if (duration == 0) {
+                    duration = DEFAULT_LED_DURATION_;
+                }
+                
+                gpio_set_level(LED_2, 1);
+                SetLedTimeout(duration);
+                return "LED 2 bật trong " + std::to_string(duration) + " giây";
+            });
+            
+        mcp.AddTool("self.led2.off", "Tắt LED 2",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                gpio_set_level(LED_2, 0);
+                return "Đã tắt LED 2";
+            });
+    }
+
     // ===== MCP: LED EFFECTS =====
     void InitializeLedEffectsMcp() {
         auto& mcp = McpServer::GetInstance();
         
-        mcp.AddTool("self.led.breath", "LED thở",
-            PropertyList({Property("speed", kPropertyTypeInteger, 3, 1, 10)}),
+        mcp.AddTool("self.led.breath", "LED thở (duration: -1=vĩnh viễn, 0=mặc định 30s)",
+            PropertyList({
+                Property("speed", kPropertyTypeInteger, 3, 1, 10),
+                Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)
+            }),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
                 int speed = p["speed"].value<int>();
+                int duration = p["duration"].value<int>();
+                
+                if (duration == -1) {
+                    SetLedTimeout(0);
+                    duration = -1;
+                } else if (duration == 0) {
+                    duration = DEFAULT_LED_DURATION_;
+                    SetLedTimeout(duration);
+                } else {
+                    SetLedTimeout(duration);
+                }
+                
                 anim_led1_.pattern = PATTERN_BREATH;
                 anim_led1_.speed = speed;
                 anim_led1_.active = true;
                 anim_led2_.pattern = PATTERN_OFF;
                 anim_led2_.active = false;
-                return "LED đang thở";
+                
+                if (duration == -1) return "LED thở vĩnh viễn";
+                return "LED thở trong " + std::to_string(duration) + " giây";
             });
             
-        mcp.AddTool("self.led.blink", "LED nhấp nháy",
-            PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
+        mcp.AddTool("self.led.blink", "LED nhấp nháy (duration: -1=vĩnh viễn, 0=mặc định 30s)",
+            PropertyList({
+                Property("speed", kPropertyTypeInteger, 5, 1, 20),
+                Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)
+            }),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
                 int speed = p["speed"].value<int>();
+                int duration = p["duration"].value<int>();
+                
+                if (duration == -1) {
+                    SetLedTimeout(0);
+                    duration = -1;
+                } else if (duration == 0) {
+                    duration = DEFAULT_LED_DURATION_;
+                    SetLedTimeout(duration);
+                } else {
+                    SetLedTimeout(duration);
+                }
+                
                 anim_led1_.pattern = PATTERN_BLINK_FAST;
                 anim_led1_.speed = speed;
                 anim_led1_.active = true;
                 anim_led2_.pattern = PATTERN_BLINK_FAST;
                 anim_led2_.speed = speed;
                 anim_led2_.active = true;
-                return "LED đang nhấp nháy";
+                
+                if (duration == -1) return "LED nhấp nháy vĩnh viễn";
+                return "LED nhấp nháy trong " + std::to_string(duration) + " giây";
             });
             
-        mcp.AddTool("self.led.heartbeat", "LED nhịp tim",
-            PropertyList(),
+        mcp.AddTool("self.led.heartbeat", "LED nhịp tim (duration: -1=vĩnh viễn, 0=mặc định 30s)",
+            PropertyList({
+                Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)
+            }),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
+                int duration = p["duration"].value<int>();
+                
+                if (duration == -1) {
+                    SetLedTimeout(0);
+                } else if (duration == 0) {
+                    duration = DEFAULT_LED_DURATION_;
+                    SetLedTimeout(duration);
+                } else {
+                    SetLedTimeout(duration);
+                }
+                
                 anim_led1_.pattern = PATTERN_HEARTBEAT;
                 anim_led1_.active = true;
                 anim_led2_.pattern = PATTERN_OFF;
                 anim_led2_.active = false;
-                return "LED đang chạy hiệu ứng nhịp tim";
+                
+                if (duration == -1) return "LED nhịp tim vĩnh viễn";
+                return "LED nhịp tim trong " + std::to_string(duration) + " giây";
             });
             
-        mcp.AddTool("self.led.wave", "LED sóng",
-            PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 10)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                led_auto_mode_ = false;
-                int speed = p["speed"].value<int>();
-                anim_led1_.pattern = PATTERN_WAVE;
-                anim_led1_.speed = speed;
-                anim_led1_.active = true;
-                anim_led2_.pattern = PATTERN_WAVE;
-                anim_led2_.speed = speed;
-                anim_led2_.active = true;
-                return "LED đang chạy hiệu ứng sóng";
-            });
-            
-        mcp.AddTool("self.led.auto", "LED tự động theo trạng thái",
+        mcp.AddTool("self.led.auto", "LED tự động theo trạng thái AI",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
+                led_timeout_ms_ = 0;
                 anim_led1_.active = true;
                 anim_led2_.active = true;
                 return "LED đã chuyển sang chế độ tự động";
@@ -567,6 +705,7 @@ private:
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
+                led_timeout_ms_ = 0;
                 anim_led1_.pattern = PATTERN_OFF;
                 anim_led1_.active = false;
                 anim_led2_.pattern = PATTERN_OFF;
@@ -574,43 +713,6 @@ private:
                 gpio_set_level(LED_1, 0);
                 gpio_set_level(LED_2, 0);
                 return "Đã tắt tất cả LED";
-            });
-    }
-
-    // ===== MCP: LED BASIC =====
-    void InitializeLedMcp() {
-        auto& mcp = McpServer::GetInstance();
-        
-        mcp.AddTool("self.led.on", "Bật LED 1",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                led_auto_mode_ = false;
-                anim_led1_.active = false;
-                gpio_set_level(LED_1, 1);
-                return "Đã bật LED 1";
-            });
-            
-        mcp.AddTool("self.led.off", "Tắt LED 1",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(LED_1, 0);
-                return "Đã tắt LED 1";
-            });
-            
-        mcp.AddTool("self.led2.on", "Bật LED 2",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                led_auto_mode_ = false;
-                anim_led2_.active = false;
-                gpio_set_level(LED_2, 1);
-                return "Đã bật LED 2";
-            });
-            
-        mcp.AddTool("self.led2.off", "Tắt LED 2",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(LED_2, 0);
-                return "Đã tắt LED 2";
             });
     }
 
@@ -650,8 +752,8 @@ public:
         InitializeSensorMcp();
         InitializeLedGpio();
         InitializeLedMcp();
-        InitializeLedEffectsMcp();  // THÊM: LED effects
-        InitializeVolumeMcp();      // THÊM: Volume control
+        InitializeLedEffectsMcp();
+        InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
 
@@ -667,7 +769,7 @@ public:
         InitializeButtons();
         InitializeTools();
         
-        // Lấy audio codec
+        // Lấy audio codec và đặt âm lượng mặc định
         audio_codec_ = GetAudioCodec();
         if (audio_codec_) {
             audio_codec_->SetOutputVolume(current_volume_);
