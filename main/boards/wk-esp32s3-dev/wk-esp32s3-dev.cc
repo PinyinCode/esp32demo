@@ -23,7 +23,7 @@
 class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
-    Display* display_ = nullptr;
+    OledDisplay* display_ = nullptr;
     FaceDisplay* face_display_ = nullptr;
     MotorController* motor_controller_ = nullptr;
     LedController* led_controller_ = nullptr;
@@ -104,14 +104,10 @@ public:
         InitializeAdc();
         
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
-        // SỬA: Truyền GPIO qua constructor
-        motor_controller_ = new MotorController(
-            DRV8833_IN1, DRV8833_IN2, DRV8833_IN3, DRV8833_IN4
-        );
+        motor_controller_ = new MotorController(DRV8833_IN1, DRV8833_IN2, DRV8833_IN3, DRV8833_IN4);
         motor_controller_->InitializeMcp();
 #endif
         
-        // SỬA: Truyền GPIO qua constructor
         led_controller_ = new LedController(LED_1, LED_2);
         led_controller_->Initialize();
         led_controller_->InitializeMcp();
