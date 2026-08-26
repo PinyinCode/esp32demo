@@ -25,37 +25,10 @@
 #include <freertos/task.h>
 #include <math.h>
 #include <algorithm>
-#include <map>
 
 #define TAG "WkEsp32s3Dev"
 
 class WkEsp32s3Dev;
-
-// ===== CẢM XÚC =====
-enum EmotionType {
-    EMOTION_NEUTRAL = 0,
-    EMOTION_HAPPY,
-    EMOTION_SAD,
-    EMOTION_ANGRY,
-    EMOTION_FEAR,
-    EMOTION_SURPRISE,
-    EMOTION_EXCITED,
-    EMOTION_LOVE,
-    EMOTION_TIRED,
-    EMOTION_CONFUSED,
-    EMOTION_COUNT
-};
-
-struct EmotionConfig {
-    EmotionType type;
-    const char* emoji;
-    LedPattern led_pattern;
-    int led_speed;
-    int motor_speed_left;
-    int motor_speed_right;
-    int motor_duration_ms;
-    const char* description;
-};
 
 // ===== SENSOR CONTROLLER =====
 class SensorController {
@@ -74,7 +47,6 @@ enum LedPattern {
     PATTERN_COMET,
     PATTERN_PULSE,
     PATTERN_TWINKLE,
-    PATTERN_RAINBOW,
 };
 
 struct LedAnimation {
@@ -109,21 +81,6 @@ private:
     uint32_t led_timeout_ms_ = 0;
     uint32_t led_timeout_start_ = 0;
     const int DEFAULT_LED_DURATION_ = 30;  // Mặc định 30 giây
-
-    // Emotion variables
-    EmotionType current_emotion_ = EMOTION_NEUTRAL;
-    uint32_t emotion_start_time_ = 0;
-    uint32_t emotion_duration_ms_ = 3000;  // Mặc định 3 giây
-    bool emotion_active_ = false;
-    uint32_t motor_stop_time_ = 0;
-    bool motor_active_ = false;
-    
-    // Emotion display buffer
-    std::string current_emoji_ = "😊";
-    std::string emotion_text_ = "Bình thường";
-
-    // Cấu hình cảm xúc
-    std::map<EmotionType, EmotionConfig> emotion_configs_;
 
     friend class SensorController;
 
@@ -177,13 +134,6 @@ private:
         }
     }
 
-    int RainbowEffect(uint32_t time_ms, int speed, int led_index) {
-        float period = 3000.0f / speed;
-        float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
-        float phase_offset = led_index == 0 ? 0 : 3.14159f;
-        return (int)((sin(phase + phase_offset) + 1) / 2 * 255);
-    }
-
     void ApplyLedEffect(int led_pin, LedAnimation anim) {
         if (!anim.active) {
             gpio_set_level((gpio_num_t)led_pin, 0);
@@ -221,9 +171,6 @@ private:
             case PATTERN_TWINKLE:
                 brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
                 break;
-            case PATTERN_RAINBOW:
-                brightness = RainbowEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
-                break;
             default:
                 brightness = 0;
                 break;
@@ -250,29 +197,7 @@ private:
     void UpdateLedCreative() {
         led_tick_ += 50;
         
-        // Kiểm tra emotion timeout
-        if (emotion_active_ && motor_active_) {
-            if (led_tick_ - motor_stop_time_ >= 0) {
-                motor_active_ = false;
-                SetLeftMotor(0);
-                SetRightMotor(0);
-            }
-        }
-        
-        // Kiểm tra emotion timeout
-        if (emotion_active_) {
-            if (led_tick_ - emotion_start_time_ >= emotion_duration_ms_) {
-                emotion_active_ = false;
-                current_emotion_ = EMOTION_NEUTRAL;
-                current_emoji_ = "😊";
-                emotion_text_ = "Bình thường";
-                led_auto_mode_ = true;
-                UpdateDisplayEmotion();
-                ESP_LOGI(TAG, "Emotion timeout, trở về trạng thái bình thường");
-            }
-        }
-        
-        // Kiểm tra LED timeout
+        // Kiểm tra timeout
         if (led_timeout_ms_ > 0) {
             if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
                 // Hết thời gian, quay lại chế độ tự động
@@ -284,24 +209,7 @@ private:
             }
         }
         
-        if (emotion_active_ && !led_auto_mode_) {
-            // Đang trong trạng thái cảm xúc
-            auto it = emotion_configs_.find(current_emotion_);
-            if (it != emotion_configs_.end()) {
-                anim_led1_.pattern = it->second.led_pattern;
-                anim_led1_.speed = it->second.led_speed;
-                anim_led1_.active = true;
-                
-                if (current_emotion_ == EMOTION_EXCITED || current_emotion_ == EMOTION_HAPPY) {
-                    anim_led2_.pattern = it->second.led_pattern;
-                    anim_led2_.speed = it->second.led_speed;
-                    anim_led2_.active = true;
-                } else {
-                    anim_led2_.pattern = PATTERN_OFF;
-                    anim_led2_.active = false;
-                }
-            }
-        } else if (led_auto_mode_) {
+        if (led_auto_mode_) {
             // Tự động theo trạng thái AI
             auto& app = Application::GetInstance();
             auto state = app.GetDeviceState();
@@ -511,80 +419,6 @@ private:
         ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
     }
 
-    // ===== HIỂN THỊ EMOJI =====
-    void UpdateDisplayEmotion() {
-        if (display_) {
-            display_->Clear();
-            display_->SetFontSize(3);
-            
-            // Hiển thị emoji lớn
-            int emoji_x = (DISPLAY_WIDTH - 40) / 2;
-            int emoji_y = 10;
-            display_->DrawText(emoji_x, emoji_y, current_emoji_.c_str());
-            
-            // Hiển thị text
-            display_->SetFontSize(2);
-            int text_x = (DISPLAY_WIDTH - emotion_text_.length() * 12) / 2;
-            int text_y = DISPLAY_HEIGHT - 40;
-            display_->DrawText(text_x, text_y, emotion_text_.c_str());
-            
-            display_->Update();
-        }
-    }
-
-    // ===== KHỞI TẠO CẤU HÌNH CẢM XÚC =====
-    void InitializeEmotionConfigs() {
-        // Neutral
-        emotion_configs_[EMOTION_NEUTRAL] = {
-            EMOTION_NEUTRAL, "😊", PATTERN_BREATH, 3, 0, 0, 0, "Bình thường"
-        };
-        
-        // Happy
-        emotion_configs_[EMOTION_HAPPY] = {
-            EMOTION_HAPPY, "😄", PATTERN_HEARTBEAT, 6, 30, 30, 2000, "Vui vẻ"
-        };
-        
-        // Sad
-        emotion_configs_[EMOTION_SAD] = {
-            EMOTION_SAD, "😢", PATTERN_BREATH, 2, 0, 0, 0, "Buồn"
-        };
-        
-        // Angry
-        emotion_configs_[EMOTION_ANGRY] = {
-            EMOTION_ANGRY, "😠", PATTERN_BLINK_FAST, 12, 60, -60, 1000, "Tức giận"
-        };
-        
-        // Fear
-        emotion_configs_[EMOTION_FEAR] = {
-            EMOTION_FEAR, "😨", PATTERN_TWINKLE, 15, -80, -80, 800, "Sợ hãi"
-        };
-        
-        // Surprise
-        emotion_configs_[EMOTION_SURPRISE] = {
-            EMOTION_SURPRISE, "😲", PATTERN_COMET, 8, 50, 0, 500, "Ngạc nhiên"
-        };
-        
-        // Excited
-        emotion_configs_[EMOTION_EXCITED] = {
-            EMOTION_EXCITED, "🤩", PATTERN_RAINBOW, 10, 100, 100, 3000, "Phấn khích"
-        };
-        
-        // Love
-        emotion_configs_[EMOTION_LOVE] = {
-            EMOTION_LOVE, "❤️", PATTERN_HEARTBEAT, 7, 20, 20, 1500, "Yêu thương"
-        };
-        
-        // Tired
-        emotion_configs_[EMOTION_TIRED] = {
-            EMOTION_TIRED, "😴", PATTERN_BREATH, 1, 0, 0, 0, "Mệt mỏi"
-        };
-        
-        // Confused
-        emotion_configs_[EMOTION_CONFUSED] = {
-            EMOTION_CONFUSED, "🤔", PATTERN_WAVE, 5, 40, -40, 1000, "Bối rối"
-        };
-    }
-
     // ===== MCP: MOTOR =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
@@ -610,7 +444,6 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 SetLeftMotor(0);
                 SetRightMotor(0);
-                motor_active_ = false;
                 return "Đã dừng động cơ";
             });
             
@@ -898,138 +731,6 @@ private:
             });
     }
 
-    // ===== MCP: EMOTION =====
-    void InitializeEmotionMcp() {
-        auto& mcp = McpServer::GetInstance();
-        
-        mcp.AddTool("self.emotion.set", "Đặt cảm xúc cho robot (happy, sad, angry, fear, surprise, excited, love, tired, confused, neutral)",
-            PropertyList({
-                Property("emotion", kPropertyTypeString, "happy"),
-                Property("duration", kPropertyTypeInteger, 3, 1, 60)
-            }),
-            [this](const PropertyList& p) -> ReturnValue {
-                std::string emotion_str = p["emotion"].value<std::string>();
-                int duration = p["duration"].value<int>();
-                
-                EmotionType emotion = EMOTION_NEUTRAL;
-                
-                // Chuyển đổi string thành enum
-                if (emotion_str == "happy" || emotion_str == "vui") emotion = EMOTION_HAPPY;
-                else if (emotion_str == "sad" || emotion_str == "buồn") emotion = EMOTION_SAD;
-                else if (emotion_str == "angry" || emotion_str == "giận" || emotion_str == "tức") emotion = EMOTION_ANGRY;
-                else if (emotion_str == "fear" || emotion_str == "sợ" || emotion_str == "sợ hãi") emotion = EMOTION_FEAR;
-                else if (emotion_str == "surprise" || emotion_str == "ngạc" || emotion_str == "bất ngờ") emotion = EMOTION_SURPRISE;
-                else if (emotion_str == "excited" || emotion_str == "phấn" || emotion_str == "hào hứng") emotion = EMOTION_EXCITED;
-                else if (emotion_str == "love" || emotion_str == "yêu") emotion = EMOTION_LOVE;
-                else if (emotion_str == "tired" || emotion_str == "mệt" || emotion_str == "buồn ngủ") emotion = EMOTION_TIRED;
-                else if (emotion_str == "confused" || emotion_str == "bối rối") emotion = EMOTION_CONFUSED;
-                else emotion = EMOTION_NEUTRAL;
-                
-                SetEmotion(emotion, duration * 1000);
-                
-                auto it = emotion_configs_.find(emotion);
-                if (it != emotion_configs_.end()) {
-                    return "Đã đặt cảm xúc: " + std::string(it->second.description) + " " + it->second.emoji;
-                }
-                return "Không nhận diện được cảm xúc: " + emotion_str;
-            });
-            
-        mcp.AddTool("self.emotion.clear", "Xóa cảm xúc, trở về trạng thái bình thường",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                ClearEmotion();
-                return "Đã trở về trạng thái bình thường";
-            });
-            
-        mcp.AddTool("self.emotion.happy", "Cảm xúc vui vẻ 😄",
-            PropertyList({Property("duration", kPropertyTypeInteger, 3, 1, 60)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int duration = p["duration"].value<int>();
-                SetEmotion(EMOTION_HAPPY, duration * 1000);
-                return "Đang vui vẻ 😄";
-            });
-            
-        mcp.AddTool("self.emotion.sad", "Cảm xúc buồn 😢",
-            PropertyList({Property("duration", kPropertyTypeInteger, 3, 1, 60)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int duration = p["duration"].value<int>();
-                SetEmotion(EMOTION_SAD, duration * 1000);
-                return "Đang buồn 😢";
-            });
-            
-        mcp.AddTool("self.emotion.fear", "Cảm xúc sợ hãi 😨 - robot lùi lại",
-            PropertyList({Property("duration", kPropertyTypeInteger, 3, 1, 60)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int duration = p["duration"].value<int>();
-                SetEmotion(EMOTION_FEAR, duration * 1000);
-                return "Đang sợ hãi 😨 - lùi lại!";
-            });
-            
-        mcp.AddTool("self.emotion.excited", "Cảm xúc phấn khích 🤩",
-            PropertyList({Property("duration", kPropertyTypeInteger, 3, 1, 60)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int duration = p["duration"].value<int>();
-                SetEmotion(EMOTION_EXCITED, duration * 1000);
-                return "Đang phấn khích 🤩";
-            });
-    }
-
-    // ===== HÀM ĐẶT CẢM XÚC =====
-    void SetEmotion(EmotionType emotion, uint32_t duration_ms) {
-        current_emotion_ = emotion;
-        emotion_start_time_ = led_tick_;
-        emotion_duration_ms_ = duration_ms;
-        emotion_active_ = true;
-        led_auto_mode_ = false;
-        
-        auto it = emotion_configs_.find(emotion);
-        if (it != emotion_configs_.end()) {
-            current_emoji_ = it->second.emoji;
-            emotion_text_ = it->second.description;
-            
-            // Cấu hình LED
-            anim_led1_.pattern = it->second.led_pattern;
-            anim_led1_.speed = it->second.led_speed;
-            anim_led1_.active = true;
-            
-            if (emotion == EMOTION_EXCITED || emotion == EMOTION_HAPPY) {
-                anim_led2_.pattern = it->second.led_pattern;
-                anim_led2_.speed = it->second.led_speed;
-                anim_led2_.active = true;
-            } else {
-                anim_led2_.pattern = PATTERN_OFF;
-                anim_led2_.active = false;
-            }
-            
-            // Cấu hình motor
-            if (it->second.motor_speed_left != 0 || it->second.motor_speed_right != 0) {
-                SetLeftMotor(it->second.motor_speed_left);
-                SetRightMotor(it->second.motor_speed_right);
-                motor_active_ = true;
-                motor_stop_time_ = led_tick_ + it->second.motor_duration_ms;
-            } else {
-                SetLeftMotor(0);
-                SetRightMotor(0);
-                motor_active_ = false;
-            }
-            
-            // Cập nhật display
-            UpdateDisplayEmotion();
-        }
-    }
-
-    void ClearEmotion() {
-        emotion_active_ = false;
-        current_emotion_ = EMOTION_NEUTRAL;
-        current_emoji_ = "😊";
-        emotion_text_ = "Bình thường";
-        led_auto_mode_ = true;
-        SetLeftMotor(0);
-        SetRightMotor(0);
-        motor_active_ = false;
-        UpdateDisplayEmotion();
-    }
-
     // ===== MCP: SENSOR =====
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
@@ -1040,8 +741,6 @@ public:
         boot_button_(BOOT_BUTTON_GPIO),
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
-
-        InitializeEmotionConfigs();
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
@@ -1057,7 +756,6 @@ public:
         InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
-        InitializeEmotionMcp();
 
         anim_led1_.active = true;
         anim_led2_.active = true;
@@ -1066,7 +764,6 @@ public:
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
         InitializeSsd1306Display();
-        UpdateDisplayEmotion();
 #endif
 
         InitializeButtons();
