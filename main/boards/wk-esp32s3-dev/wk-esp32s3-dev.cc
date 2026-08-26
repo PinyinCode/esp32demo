@@ -24,6 +24,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
+#include <algorithm>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -74,8 +75,9 @@ private:
     uint32_t led_tick_ = 0;
 
     // Audio variables
-    int current_volume_ = 85;  // MAX98357A cần volume cao
+    int current_volume_ = 85;
     AudioCodec* audio_codec_ = nullptr;
+    bool audio_initialized_ = false;
 
     friend class SensorController;
 
@@ -238,28 +240,25 @@ private:
         ESP_LOGI(TAG, "Audio input sample rate: %d", AUDIO_INPUT_SAMPLE_RATE);
         ESP_LOGI(TAG, "Audio output sample rate: %d", AUDIO_OUTPUT_SAMPLE_RATE);
         
-        // Get audio codec instance
         audio_codec_ = GetAudioCodec();
         if (audio_codec_) {
             ESP_LOGI(TAG, "Audio codec created successfully");
             
-            // Set default volume
             audio_codec_->SetOutputVolume(current_volume_);
             ESP_LOGI(TAG, "Set volume to: %d%%", current_volume_);
             
-            // Unmute audio
             audio_codec_->SetOutputMute(false);
             ESP_LOGI(TAG, "Audio unmuted");
             
-            // Enable input and output
             audio_codec_->EnableInput(true);
             audio_codec_->EnableOutput(true);
             ESP_LOGI(TAG, "Input and output enabled");
+            
+            audio_initialized_ = true;
         } else {
             ESP_LOGE(TAG, "Failed to create audio codec!");
         }
         
-        // Also set volume through Application
         auto& app = Application::GetInstance();
         app.SetVolume(current_volume_);
         
@@ -324,6 +323,8 @@ private:
             .hpoint = 0
         };
         ledc_channel_config(&ch4);
+        
+        ESP_LOGI(TAG, "Motor PWM initialized");
     }
     
     void SetLeftMotor(int speed) {
@@ -431,7 +432,6 @@ private:
                 
                 if (audio_codec_) {
                     audio_codec_->SetOutputVolume(level);
-                    ESP_LOGI(TAG, "Volume set to %d%%", level);
                 }
                 auto& app = Application::GetInstance();
                 app.SetVolume(level);
@@ -520,7 +520,9 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed);
-                return "Motor trái: " + std::to_string(speed) + "%";
+                char result[64];
+                snprintf(result, sizeof(result), "Motor trái: %d%%", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.right", "Điều khiển động cơ phải (speed: -100 đến 100)",
@@ -528,7 +530,9 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetRightMotor(speed);
-                return "Motor phải: " + std::to_string(speed) + "%";
+                char result[64];
+                snprintf(result, sizeof(result), "Motor phải: %d%%", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
@@ -545,7 +549,9 @@ private:
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(speed);
-                return "Robot tiến với tốc độ " + std::to_string(speed) + "%";
+                char result[64];
+                snprintf(result, sizeof(result), "Robot tiến với tốc độ %d%%", speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.backward", "Robot lùi (speed: 0-100)",
@@ -554,7 +560,9 @@ private:
                 int speed = -p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(speed);
-                return "Robot lùi với tốc độ " + std::to_string(-speed) + "%";
+                char result[64];
+                snprintf(result, sizeof(result), "Robot lùi với tốc độ %d%%", -speed);
+                return std::string(result);
             });
             
         mcp.AddTool("self.motor.turn_left", "Robot rẽ trái (speed: 0-100)",
@@ -749,6 +757,7 @@ public:
     }
 
     void InitializeTools() {
+        // Keep tools
     }
 
     virtual Led* GetLed() override {
@@ -758,27 +767,26 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-        // Sử dụng NoAudioCodecSimplex với cấu hình cho MAX98357A và INMP441
         static NoAudioCodecSimplex audio_codec(
-            AUDIO_INPUT_SAMPLE_RATE,    // 16000
-            AUDIO_OUTPUT_SAMPLE_RATE,   // 24000
-            AUDIO_I2S_SPK_GPIO_BCLK,    // 15 - BCLK cho loa
-            AUDIO_I2S_SPK_GPIO_LRCK,    // 16 - LRCK cho loa
-            AUDIO_I2S_SPK_GPIO_DOUT,    // 7  - DOUT cho loa
-            I2S_STD_SLOT_RIGHT,         // MAX98357A thường dùng Right Channel
-            AUDIO_I2S_MIC_GPIO_SCK,     // 5  - SCK cho mic
-            AUDIO_I2S_MIC_GPIO_WS,      // 4  - WS cho mic
-            AUDIO_I2S_MIC_GPIO_DIN,     // 6  - DIN cho mic
-            I2S_STD_SLOT_LEFT           // INMP441 thường dùng Left Channel
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_SPK_GPIO_BCLK,
+            AUDIO_I2S_SPK_GPIO_LRCK,
+            AUDIO_I2S_SPK_GPIO_DOUT,
+            I2S_STD_SLOT_RIGHT,
+            AUDIO_I2S_MIC_GPIO_SCK,
+            AUDIO_I2S_MIC_GPIO_WS,
+            AUDIO_I2S_MIC_GPIO_DIN,
+            I2S_STD_SLOT_LEFT
         );
         return &audio_codec;
 #else
         static NoAudioCodecDuplex audio_codec(
-            AUDIO_INPUT_SAMPLE_RATE, 
+            AUDIO_INPUT_SAMPLE_RATE,
             AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_BCLK, 
-            AUDIO_I2S_GPIO_WS, 
-            AUDIO_I2S_GPIO_DOUT, 
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
             AUDIO_I2S_GPIO_DIN
         );
         return &audio_codec;
