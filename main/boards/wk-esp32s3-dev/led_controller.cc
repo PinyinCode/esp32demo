@@ -1,12 +1,12 @@
 #include "led_controller.h"
-#include "config.h"  // THÊM: Include config.h
 #include "application.h"
 #include "mcp_server.h"
 #include <esp_log.h>
 
 #define TAG "LedController"
 
-LedController::LedController() {
+LedController::LedController(gpio_num_t led1_pin, gpio_num_t led2_pin)
+    : led1_pin_(led1_pin), led2_pin_(led2_pin) {
     ESP_LOGI(TAG, "LED Controller created");
 }
 
@@ -18,15 +18,15 @@ LedController::~LedController() {
 
 void LedController::Initialize() {
     gpio_config_t io_conf = {
-        .pin_bit_mask = (1ULL << LED_1) | (1ULL << LED_2),
+        .pin_bit_mask = (1ULL << led1_pin_) | (1ULL << led2_pin_),
         .mode = GPIO_MODE_OUTPUT,
         .pull_up_en = GPIO_PULLUP_DISABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io_conf);
-    gpio_set_level(LED_1, 0);
-    gpio_set_level(LED_2, 0);
+    gpio_set_level(led1_pin_, 0);
+    gpio_set_level(led2_pin_, 0);
     
     xTaskCreate(LedTask, "led_task", 4096, this, 5, &led_task_handle_);
     ESP_LOGI(TAG, "LED Controller initialized");
@@ -72,13 +72,9 @@ int LedController::TwinkleEffect(uint32_t time_ms, int speed, int led_index) {
 int LedController::PulseEffect(uint32_t time_ms, int speed) {
     int pulse_width = 200 / speed;
     uint32_t cycle = time_ms % (pulse_width * 4);
-    if (cycle < pulse_width) {
-        return (cycle * 255) / pulse_width;
-    } else if (cycle < pulse_width * 2) {
-        return 255 - ((cycle - pulse_width) * 255 / pulse_width);
-    } else {
-        return 0;
-    }
+    if (cycle < pulse_width) return (cycle * 255) / pulse_width;
+    else if (cycle < pulse_width * 2) return 255 - ((cycle - pulse_width) * 255 / pulse_width);
+    else return 0;
 }
 
 void LedController::ApplyLedEffect(int led_pin, LedAnimation anim) {
@@ -96,10 +92,10 @@ void LedController::ApplyLedEffect(int led_pin, LedAnimation anim) {
         case PATTERN_BLINK_FAST: brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0; break;
         case PATTERN_BLINK_SLOW: brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0; break;
         case PATTERN_HEARTBEAT: brightness = HeartbeatEffect(time); break;
-        case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-        case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+        case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == led1_pin_ ? 0 : 1); break;
+        case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == led1_pin_ ? 0 : 1); break;
         case PATTERN_PULSE: brightness = PulseEffect(time, anim.speed); break;
-        case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+        case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == led1_pin_ ? 0 : 1); break;
         default: brightness = 0; break;
     }
     
@@ -107,9 +103,8 @@ void LedController::ApplyLedEffect(int led_pin, LedAnimation anim) {
 }
 
 void LedController::SetLedTimeout(int duration_seconds) {
-    if (duration_seconds <= 0) {
-        led_timeout_ms_ = 0;
-    } else {
+    if (duration_seconds <= 0) led_timeout_ms_ = 0;
+    else {
         led_timeout_ms_ = duration_seconds * 1000;
         led_timeout_start_ = led_tick_;
     }
@@ -121,43 +116,24 @@ void LedController::UpdateLedByState() {
     
     switch (state) {
         case kDeviceStateIdle:
-            anim_led1_.pattern = PATTERN_BREATH;
-            anim_led1_.speed = 3;
-            anim_led1_.active = true;
-            anim_led2_.pattern = PATTERN_OFF;
-            anim_led2_.active = false;
+            anim_led1_ = {PATTERN_BREATH, 3, true};
+            anim_led2_ = {PATTERN_OFF, 0, false};
             break;
         case kDeviceStateConnecting:
-            anim_led1_.pattern = PATTERN_PULSE;
-            anim_led1_.speed = 8;
-            anim_led1_.active = true;
-            anim_led2_.pattern = PATTERN_PULSE;
-            anim_led2_.speed = 8;
-            anim_led2_.active = true;
+            anim_led1_ = {PATTERN_PULSE, 8, true};
+            anim_led2_ = {PATTERN_PULSE, 8, true};
             break;
         case kDeviceStateListening:
-            anim_led1_.pattern = PATTERN_BLINK_FAST;
-            anim_led1_.speed = 10;
-            anim_led1_.active = true;
-            anim_led2_.pattern = PATTERN_WAVE;
-            anim_led2_.speed = 7;
-            anim_led2_.active = true;
+            anim_led1_ = {PATTERN_BLINK_FAST, 10, true};
+            anim_led2_ = {PATTERN_WAVE, 7, true};
             break;
         case kDeviceStateSpeaking:
-            anim_led1_.pattern = PATTERN_HEARTBEAT;
-            anim_led1_.speed = 5;
-            anim_led1_.active = true;
-            anim_led2_.pattern = PATTERN_BREATH;
-            anim_led2_.speed = 4;
-            anim_led2_.active = true;
+            anim_led1_ = {PATTERN_HEARTBEAT, 5, true};
+            anim_led2_ = {PATTERN_BREATH, 4, true};
             break;
         default:
-            anim_led1_.pattern = PATTERN_BLINK_FAST;
-            anim_led1_.speed = 12;
-            anim_led1_.active = true;
-            anim_led2_.pattern = PATTERN_BLINK_FAST;
-            anim_led2_.speed = 12;
-            anim_led2_.active = true;
+            anim_led1_ = {PATTERN_BLINK_FAST, 12, true};
+            anim_led2_ = {PATTERN_BLINK_FAST, 12, true};
             break;
     }
 }
@@ -165,20 +141,15 @@ void LedController::UpdateLedByState() {
 void LedController::UpdateLed() {
     led_tick_ += 50;
     
-    if (led_timeout_ms_ > 0) {
-        if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
-            led_timeout_ms_ = 0;
-            led_auto_mode_ = true;
-            ESP_LOGI(TAG, "LED timeout, trở về chế độ tự động");
-        }
+    if (led_timeout_ms_ > 0 && led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
+        led_timeout_ms_ = 0;
+        led_auto_mode_ = true;
     }
     
-    if (led_auto_mode_) {
-        UpdateLedByState();
-    }
+    if (led_auto_mode_) UpdateLedByState();
     
-    ApplyLedEffect(LED_1, anim_led1_);
-    ApplyLedEffect(LED_2, anim_led2_);
+    ApplyLedEffect(led1_pin_, anim_led1_);
+    ApplyLedEffect(led2_pin_, anim_led2_);
 }
 
 void LedController::LedTask(void* arg) {
@@ -192,44 +163,35 @@ void LedController::LedTask(void* arg) {
 void LedController::SetLed1(bool on, int duration) {
     led_auto_mode_ = false;
     anim_led1_.active = false;
-    gpio_set_level(LED_1, on ? 1 : 0);
+    gpio_set_level(led1_pin_, on ? 1 : 0);
     SetLedTimeout(duration);
 }
 
 void LedController::SetLed2(bool on, int duration) {
     led_auto_mode_ = false;
     anim_led2_.active = false;
-    gpio_set_level(LED_2, on ? 1 : 0);
+    gpio_set_level(led2_pin_, on ? 1 : 0);
     SetLedTimeout(duration);
 }
 
 void LedController::SetBreath(int speed, int duration) {
     led_auto_mode_ = false;
-    anim_led1_.pattern = PATTERN_BREATH;
-    anim_led1_.speed = speed;
-    anim_led1_.active = true;
-    anim_led2_.pattern = PATTERN_OFF;
-    anim_led2_.active = false;
+    anim_led1_ = {PATTERN_BREATH, speed, true};
+    anim_led2_ = {PATTERN_OFF, 0, false};
     SetLedTimeout(duration);
 }
 
 void LedController::SetBlink(int speed, int duration) {
     led_auto_mode_ = false;
-    anim_led1_.pattern = PATTERN_BLINK_FAST;
-    anim_led1_.speed = speed;
-    anim_led1_.active = true;
-    anim_led2_.pattern = PATTERN_BLINK_FAST;
-    anim_led2_.speed = speed;
-    anim_led2_.active = true;
+    anim_led1_ = {PATTERN_BLINK_FAST, speed, true};
+    anim_led2_ = {PATTERN_BLINK_FAST, speed, true};
     SetLedTimeout(duration);
 }
 
 void LedController::SetHeartbeat(int duration) {
     led_auto_mode_ = false;
-    anim_led1_.pattern = PATTERN_HEARTBEAT;
-    anim_led1_.active = true;
-    anim_led2_.pattern = PATTERN_OFF;
-    anim_led2_.active = false;
+    anim_led1_ = {PATTERN_HEARTBEAT, 5, true};
+    anim_led2_ = {PATTERN_OFF, 0, false};
     SetLedTimeout(duration);
 }
 
@@ -241,92 +203,64 @@ void LedController::SetAutoMode() {
 void LedController::OffAll() {
     led_auto_mode_ = false;
     led_timeout_ms_ = 0;
-    anim_led1_.pattern = PATTERN_OFF;
-    anim_led1_.active = false;
-    anim_led2_.pattern = PATTERN_OFF;
-    anim_led2_.active = false;
-    gpio_set_level(LED_1, 0);
-    gpio_set_level(LED_2, 0);
+    anim_led1_ = {PATTERN_OFF, 0, false};
+    anim_led2_ = {PATTERN_OFF, 0, false};
+    gpio_set_level(led1_pin_, 0);
+    gpio_set_level(led2_pin_, 0);
 }
 
 void LedController::InitializeMcp() {
     auto& mcp = McpServer::GetInstance();
     
     mcp.AddTool("self.led.on", "Bật LED 1",
-        PropertyList({Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)}),
+        PropertyList({Property("duration", kPropertyTypeInteger, 30, -1, 3600)}),
         [this](const PropertyList& p) -> ReturnValue {
-            int duration = p["duration"].value<int>();
-            SetLed1(true, duration == -1 ? 0 : duration);
+            SetLed1(true, p["duration"].value<int>());
             return "LED 1 bật";
         });
         
-    mcp.AddTool("self.led.off", "Tắt LED 1",
-        PropertyList(),
+    mcp.AddTool("self.led.off", "Tắt LED 1", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetLed1(false, 0);
-            return "Đã tắt LED 1";
-        });
-        
-    mcp.AddTool("self.led2.on", "Bật LED 2",
-        PropertyList({Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)}),
-        [this](const PropertyList& p) -> ReturnValue {
-            int duration = p["duration"].value<int>();
-            SetLed2(true, duration == -1 ? 0 : duration);
-            return "LED 2 bật";
-        });
-        
-    mcp.AddTool("self.led2.off", "Tắt LED 2",
-        PropertyList(),
-        [this](const PropertyList& p) -> ReturnValue {
-            SetLed2(false, 0);
-            return "Đã tắt LED 2";
+            return "LED 1 tắt";
         });
         
     mcp.AddTool("self.led.breath", "LED thở",
         PropertyList({
             Property("speed", kPropertyTypeInteger, 3, 1, 10),
-            Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)
+            Property("duration", kPropertyTypeInteger, 30, -1, 3600)
         }),
         [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            int duration = p["duration"].value<int>();
-            SetBreath(speed, duration == -1 ? 0 : duration);
+            SetBreath(p["speed"].value<int>(), p["duration"].value<int>());
             return "LED thở";
         });
         
     mcp.AddTool("self.led.blink", "LED nhấp nháy",
         PropertyList({
             Property("speed", kPropertyTypeInteger, 5, 1, 20),
-            Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)
+            Property("duration", kPropertyTypeInteger, 30, -1, 3600)
         }),
         [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            int duration = p["duration"].value<int>();
-            SetBlink(speed, duration == -1 ? 0 : duration);
+            SetBlink(p["speed"].value<int>(), p["duration"].value<int>());
             return "LED nhấp nháy";
         });
         
     mcp.AddTool("self.led.heartbeat", "LED nhịp tim",
-        PropertyList({
-            Property("duration", kPropertyTypeInteger, DEFAULT_LED_DURATION_, -1, 3600)
-        }),
+        PropertyList({Property("duration", kPropertyTypeInteger, 30, -1, 3600)}),
         [this](const PropertyList& p) -> ReturnValue {
-            int duration = p["duration"].value<int>();
-            SetHeartbeat(duration == -1 ? 0 : duration);
+            SetHeartbeat(p["duration"].value<int>());
             return "LED nhịp tim";
         });
         
-    mcp.AddTool("self.led.auto", "LED tự động",
-        PropertyList(),
+    mcp.AddTool("self.led.auto", "LED tự động", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             SetAutoMode();
             return "LED tự động";
         });
         
-    mcp.AddTool("self.led.off_all", "Tắt tất cả LED",
-        PropertyList(),
+    mcp.AddTool("self.led.off_all", "Tắt tất cả LED", PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             OffAll();
-            return "Đã tắt tất cả LED";
+            return "Đã tắt hết";
         });
 }
