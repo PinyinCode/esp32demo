@@ -24,7 +24,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
-#include <driver/i2s_std.h>
+#include <driver/i2s.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -36,7 +36,7 @@ public:
     SensorController(WkEsp32s3Dev* board);
 };
 
-// ===== SIMPLE AUDIO CODEC (tự viết, không phụ thuộc thư viện ngoài) =====
+// ===== SIMPLE AUDIO CODEC (dùng I2S API cũ của ESP-IDF v6.0.2) =====
 class SimpleAudioCodec : public AudioCodec {
 public:
     SimpleAudioCodec(int input_sample_rate, int output_sample_rate,
@@ -61,62 +61,77 @@ public:
         ESP_LOGI("SimpleAudioCodec", "Starting...");
         
         // Cấu hình I2S cho loa (MAX98357A)
-        i2s_std_config_t spk_config = {
-            .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(output_sample_rate_),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-            .gpio_cfg = {
-                .mclk = GPIO_NUM_NC,
-                .bclk = spk_bclk_,
-                .ws = spk_lrck_,
-                .dout = spk_dout_,
-                .din = GPIO_NUM_NC,
-                .invert_flags = {
-                    .mclk_inv = false,
-                    .bclk_inv = false,
-                    .ws_inv = false,
-                },
-            },
+        i2s_config_t spk_i2s_config = {
+            .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX),
+            .sample_rate = (uint32_t)output_sample_rate_,
+            .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+            .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+            .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+            .intr_alloc_flags = 0,
+            .dma_buf_count = 8,
+            .dma_buf_len = 1024,
+            .use_apll = false,
+            .tx_desc_auto_clear = true,
+            .fixed_mclk = 0,
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+            .bits_per_chan = I2S_BITS_PER_CHAN_16BIT,
         };
         
-        // Cấu hình I2S cho mic (INMP441)
-        i2s_std_config_t mic_config = {
-            .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(input_sample_rate_),
-            .slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO),
-            .gpio_cfg = {
-                .mclk = GPIO_NUM_NC,
-                .bclk = mic_sck_,
-                .ws = mic_ws_,
-                .dout = GPIO_NUM_NC,
-                .din = mic_din_,
-                .invert_flags = {
-                    .mclk_inv = false,
-                    .bclk_inv = false,
-                    .ws_inv = false,
-                },
-            },
+        i2s_pin_config_t spk_pin_config = {
+            .bck_io_num = spk_bclk_,
+            .ws_io_num = spk_lrck_,
+            .data_out_num = spk_dout_,
+            .data_in_num = GPIO_NUM_NC,
         };
         
-        // Khởi tạo I2S cho loa
-        esp_err_t ret = i2s_channel_alloc_std(&spk_config, &spk_tx_handle_, &spk_rx_handle_);
+        esp_err_t ret = i2s_driver_install(I2S_NUM_0, &spk_i2s_config, 0, NULL);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Speaker alloc failed: %d", ret);
-            return false;
-        }
-        ret = i2s_channel_enable(spk_tx_handle_);
-        if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Speaker enable failed: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Speaker I2S install failed: %d", ret);
             return false;
         }
         
-        // Khởi tạo I2S cho mic
-        ret = i2s_channel_alloc_std(&mic_config, &mic_tx_handle_, &mic_rx_handle_);
+        ret = i2s_set_pin(I2S_NUM_0, &spk_pin_config);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Mic alloc failed: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Speaker I2S set pin failed: %d", ret);
             return false;
         }
-        ret = i2s_channel_enable(mic_rx_handle_);
+        
+        // Cấu hình I2S cho mic (INMP441) - dùng I2S_NUM_1
+        i2s_config_t mic_i2s_config = {
+            .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+            .sample_rate = (uint32_t)input_sample_rate_,
+            .bits_per_sample = I2S_BITS_PER_SAMPLE_16BIT,
+            .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+            .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+            .intr_alloc_flags = 0,
+            .dma_buf_count = 8,
+            .dma_buf_len = 1024,
+            .use_apll = false,
+            .tx_desc_auto_clear = true,
+            .fixed_mclk = 0,
+            .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+            .bits_per_chan = I2S_BITS_PER_CHAN_16BIT,
+        };
+        
+        i2s_pin_config_t mic_pin_config = {
+            .bck_io_num = mic_sck_,
+            .ws_io_num = mic_ws_,
+            .data_out_num = GPIO_NUM_NC,
+            .data_in_num = mic_din_,
+        };
+        
+        ret = i2s_driver_install(I2S_NUM_1, &mic_i2s_config, 0, NULL);
         if (ret != ESP_OK) {
-            ESP_LOGE("SimpleAudioCodec", "Mic enable failed: %d", ret);
+            ESP_LOGE("SimpleAudioCodec", "Mic I2S install failed: %d", ret);
+            i2s_driver_uninstall(I2S_NUM_0);
+            return false;
+        }
+        
+        ret = i2s_set_pin(I2S_NUM_1, &mic_pin_config);
+        if (ret != ESP_OK) {
+            ESP_LOGE("SimpleAudioCodec", "Mic I2S set pin failed: %d", ret);
+            i2s_driver_uninstall(I2S_NUM_0);
+            i2s_driver_uninstall(I2S_NUM_1);
             return false;
         }
         
@@ -130,34 +145,18 @@ public:
         
         ESP_LOGI("SimpleAudioCodec", "Stopping...");
         
-        if (spk_tx_handle_) {
-            i2s_channel_disable(spk_tx_handle_);
-            i2s_del_channel(spk_tx_handle_);
-            spk_tx_handle_ = nullptr;
-        }
-        if (spk_rx_handle_) {
-            i2s_del_channel(spk_rx_handle_);
-            spk_rx_handle_ = nullptr;
-        }
-        if (mic_tx_handle_) {
-            i2s_del_channel(mic_tx_handle_);
-            mic_tx_handle_ = nullptr;
-        }
-        if (mic_rx_handle_) {
-            i2s_channel_disable(mic_rx_handle_);
-            i2s_del_channel(mic_rx_handle_);
-            mic_rx_handle_ = nullptr;
-        }
+        i2s_driver_uninstall(I2S_NUM_0);
+        i2s_driver_uninstall(I2S_NUM_1);
         
         initialized_ = false;
         return true;
     }
     
     virtual int Read(int16_t* data, int samples) override {
-        if (!initialized_ || !mic_rx_handle_) return 0;
+        if (!initialized_) return 0;
         
         size_t bytes_read = 0;
-        esp_err_t ret = i2s_channel_read(mic_rx_handle_, data, samples * sizeof(int16_t), &bytes_read, pdMS_TO_TICKS(100));
+        esp_err_t ret = i2s_read(I2S_NUM_1, data, samples * sizeof(int16_t), &bytes_read, pdMS_TO_TICKS(100));
         if (ret == ESP_OK && bytes_read == samples * sizeof(int16_t)) {
             return samples;
         }
@@ -165,10 +164,10 @@ public:
     }
     
     virtual int Write(const int16_t* data, int samples) override {
-        if (!initialized_ || !spk_tx_handle_) return 0;
+        if (!initialized_) return 0;
         
         size_t bytes_written = 0;
-        esp_err_t ret = i2s_channel_write(spk_tx_handle_, (void*)data, samples * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(100));
+        esp_err_t ret = i2s_write(I2S_NUM_0, data, samples * sizeof(int16_t), &bytes_written, pdMS_TO_TICKS(100));
         if (ret == ESP_OK && bytes_written == samples * sizeof(int16_t)) {
             return samples;
         }
@@ -194,11 +193,6 @@ private:
     gpio_num_t mic_sck_;
     gpio_num_t mic_ws_;
     gpio_num_t mic_din_;
-    
-    i2s_chan_handle_t spk_tx_handle_ = nullptr;
-    i2s_chan_handle_t spk_rx_handle_ = nullptr;
-    i2s_chan_handle_t mic_tx_handle_ = nullptr;
-    i2s_chan_handle_t mic_rx_handle_ = nullptr;
     
     bool initialized_ = false;
 };
