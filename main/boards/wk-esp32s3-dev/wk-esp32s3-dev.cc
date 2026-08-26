@@ -26,7 +26,6 @@
 #include <math.h>
 #include <algorithm>
 #include <string>
-#include <lvgl.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -62,7 +61,7 @@ struct LedAnimation {
 class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
-    OledDisplay* display_ = nullptr;
+    Display* display_ = nullptr;
     i2c_master_bus_handle_t display_i2c_bus_;
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
@@ -88,158 +87,7 @@ private:
     std::string current_emotion_ = "neutral";
     bool emotion_auto_mode_ = true;
 
-    // LVGL eye objects
-    lv_obj_t* eye_container_ = nullptr;
-
     friend class SensorController;
-
-    // ===== VẼ MẮT BẰNG LVGL =====
-    void DrawEyeLvgl(lv_obj_t* parent, int cx, int cy, int radius, bool blink = false) {
-        static lv_color_t cbuf[LV_CANVAS_BUF_SIZE_TRUE_COLOR(32, 32)];
-        lv_obj_t* canvas = lv_canvas_create(parent);
-        lv_canvas_set_buffer(canvas, cbuf, 32, 32, LV_IMG_CF_TRUE_COLOR);
-        lv_canvas_fill_bg(canvas, lv_color_white(), LV_OPA_COVER);
-        
-        lv_draw_rect_dsc_t rect_dsc;
-        lv_draw_rect_dsc_init(&rect_dsc);
-        rect_dsc.bg_color = lv_color_black();
-        
-        if (blink) {
-            rect_dsc.radius = 2;
-            lv_canvas_draw_rect(canvas, 16 - radius, 15, radius * 2, 3, &rect_dsc);
-        } else {
-            rect_dsc.radius = radius;
-            lv_canvas_draw_rect(canvas, 16 - radius, 16 - radius, radius * 2, radius * 2, &rect_dsc);
-            
-            rect_dsc.bg_color = lv_color_white();
-            rect_dsc.radius = radius / 2;
-            lv_canvas_draw_rect(canvas, 16 - radius/2, 16 - radius/2, radius, radius, &rect_dsc);
-        }
-        
-        lv_obj_set_pos(canvas, cx - 16, cy - 16);
-    }
-
-    void ShowEmotionEyesLvgl(const std::string& emotion) {
-        if (!display_) return;
-        
-        lv_obj_t* scr = lv_scr_act();
-        
-        if (eye_container_) {
-            lv_obj_del(eye_container_);
-            eye_container_ = nullptr;
-        }
-        
-        eye_container_ = lv_obj_create(scr);
-        lv_obj_set_size(eye_container_, 128, 64);
-        lv_obj_set_pos(eye_container_, 0, 0);
-        lv_obj_set_style_bg_color(eye_container_, lv_color_white(), 0);
-        lv_obj_set_style_border_width(eye_container_, 0, 0);
-        lv_obj_set_style_pad_all(eye_container_, 0, 0);
-        
-        if (emotion == "happy") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-        }
-        else if (emotion == "sad") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-            
-            lv_obj_t* brow = lv_obj_create(eye_container_);
-            lv_obj_set_size(brow, 30, 3);
-            lv_obj_set_pos(brow, 25, 15);
-            lv_obj_set_style_bg_color(brow, lv_color_black(), 0);
-            lv_obj_set_style_radius(brow, 2, 0);
-            
-            lv_obj_t* brow2 = lv_obj_create(eye_container_);
-            lv_obj_set_size(brow2, 30, 3);
-            lv_obj_set_pos(brow2, 73, 15);
-            lv_obj_set_style_bg_color(brow2, lv_color_black(), 0);
-            lv_obj_set_style_radius(brow2, 2, 0);
-        }
-        else if (emotion == "angry") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-            
-            lv_obj_t* brow = lv_obj_create(eye_container_);
-            lv_obj_set_size(brow, 30, 3);
-            lv_obj_set_pos(brow, 25, 18);
-            lv_obj_set_style_bg_color(brow, lv_color_black(), 0);
-            lv_obj_set_style_radius(brow, 2, 0);
-            
-            lv_obj_t* brow2 = lv_obj_create(eye_container_);
-            lv_obj_set_size(brow2, 30, 3);
-            lv_obj_set_pos(brow2, 73, 18);
-            lv_obj_set_style_bg_color(brow2, lv_color_black(), 0);
-            lv_obj_set_style_radius(brow2, 2, 0);
-        }
-        else if (emotion == "surprised") {
-            DrawEyeLvgl(eye_container_, 40, 32, 12);
-            DrawEyeLvgl(eye_container_, 88, 32, 12);
-        }
-        else if (emotion == "sleeping") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8, true);
-            DrawEyeLvgl(eye_container_, 88, 32, 8, true);
-        }
-        else if (emotion == "love") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-            
-            lv_obj_t* heart = lv_label_create(eye_container_);
-            lv_label_set_text(heart, "❤");
-            lv_obj_set_pos(heart, 28, 45);
-            lv_obj_set_style_text_color(heart, lv_color_black(), 0);
-            
-            lv_obj_t* heart2 = lv_label_create(eye_container_);
-            lv_label_set_text(heart2, "❤");
-            lv_obj_set_pos(heart2, 78, 45);
-            lv_obj_set_style_text_color(heart2, lv_color_black(), 0);
-        }
-        else if (emotion == "thinking") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-            
-            lv_obj_t* pupil = lv_obj_create(eye_container_);
-            lv_obj_set_size(pupil, 4, 4);
-            lv_obj_set_pos(pupil, 38, 24);
-            lv_obj_set_style_bg_color(pupil, lv_color_white(), 0);
-            lv_obj_set_style_radius(pupil, 2, 0);
-            
-            lv_obj_t* pupil2 = lv_obj_create(eye_container_);
-            lv_obj_set_size(pupil2, 4, 4);
-            lv_obj_set_pos(pupil2, 86, 24);
-            lv_obj_set_style_bg_color(pupil2, lv_color_white(), 0);
-            lv_obj_set_style_radius(pupil2, 2, 0);
-        }
-        else if (emotion == "listening") {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-            
-            lv_obj_t* pupil = lv_obj_create(eye_container_);
-            lv_obj_set_size(pupil, 4, 4);
-            lv_obj_set_pos(pupil, 34, 30);
-            lv_obj_set_style_bg_color(pupil, lv_color_white(), 0);
-            lv_obj_set_style_radius(pupil, 2, 0);
-            
-            lv_obj_t* pupil2 = lv_obj_create(eye_container_);
-            lv_obj_set_size(pupil2, 4, 4);
-            lv_obj_set_pos(pupil2, 82, 30);
-            lv_obj_set_style_bg_color(pupil2, lv_color_white(), 0);
-            lv_obj_set_style_radius(pupil2, 2, 0);
-        }
-        else if (emotion == "speaking") {
-            if (led_tick_ % 2000 < 100) {
-                DrawEyeLvgl(eye_container_, 40, 32, 8, true);
-                DrawEyeLvgl(eye_container_, 88, 32, 8, true);
-            } else {
-                DrawEyeLvgl(eye_container_, 40, 32, 8);
-                DrawEyeLvgl(eye_container_, 88, 32, 8);
-            }
-        }
-        else {
-            DrawEyeLvgl(eye_container_, 40, 32, 8);
-            DrawEyeLvgl(eye_container_, 88, 32, 8);
-        }
-    }
 
     // ===== LED EFFECT FUNCTIONS =====
     int BreathEffect(uint32_t time_ms, int speed) {
@@ -301,16 +149,36 @@ private:
         uint32_t time = led_tick_;
         
         switch (anim.pattern) {
-            case PATTERN_OFF: brightness = 0; break;
-            case PATTERN_BREATH: brightness = BreathEffect(time, anim.speed); break;
-            case PATTERN_BLINK_FAST: brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0; break;
-            case PATTERN_BLINK_SLOW: brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0; break;
-            case PATTERN_HEARTBEAT: brightness = HeartbeatEffect(time); break;
-            case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            case PATTERN_PULSE: brightness = PulseEffect(time, anim.speed, 0); break;
-            case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            default: brightness = 0; break;
+            case PATTERN_OFF:
+                brightness = 0;
+                break;
+            case PATTERN_BREATH:
+                brightness = BreathEffect(time, anim.speed);
+                break;
+            case PATTERN_BLINK_FAST:
+                brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0;
+                break;
+            case PATTERN_BLINK_SLOW:
+                brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0;
+                break;
+            case PATTERN_HEARTBEAT:
+                brightness = HeartbeatEffect(time);
+                break;
+            case PATTERN_WAVE:
+                brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            case PATTERN_COMET:
+                brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            case PATTERN_PULSE:
+                brightness = PulseEffect(time, anim.speed, 0);
+                break;
+            case PATTERN_TWINKLE:
+                brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1);
+                break;
+            default:
+                brightness = 0;
+                break;
         }
         
         gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
@@ -332,9 +200,6 @@ private:
         emotion_auto_mode_ = false;
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
-        
-        // Hiển thị mắt LVGL
-        ShowEmotionEyesLvgl(emotion);
         
         if (emotion == "happy") {
             led_auto_mode_ = false;
@@ -482,11 +347,6 @@ private:
             UpdateEmotionByState();
         }
         
-        // Cập nhật mắt chớp khi speaking
-        if (current_emotion_ == "speaking") {
-            ShowEmotionEyesLvgl("speaking");
-        }
-        
         if (led_timeout_ms_ > 0) {
             if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
                 led_timeout_ms_ = 0;
@@ -548,26 +408,42 @@ private:
         ledc_timer_config(&timer);
         
         ledc_channel_config_t ch1 = {
-            .gpio_num = DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
+            .gpio_num = DRV8833_IN1,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_0,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
         };
         ledc_channel_config(&ch1);
         
         ledc_channel_config_t ch2 = {
-            .gpio_num = DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
+            .gpio_num = DRV8833_IN2,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_1,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
         };
         ledc_channel_config(&ch2);
         
         ledc_channel_config_t ch3 = {
-            .gpio_num = DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
+            .gpio_num = DRV8833_IN3,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_2,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
         };
         ledc_channel_config(&ch3);
         
         ledc_channel_config_t ch4 = {
-            .gpio_num = DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0
+            .gpio_num = DRV8833_IN4,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel = LEDC_CHANNEL_3,
+            .timer_sel = LEDC_TIMER_0,
+            .duty = 0,
+            .hpoint = 0
         };
         ledc_channel_config(&ch4);
     }
@@ -728,6 +604,20 @@ private:
                 gpio_set_level(LED_2, 0);
                 return "LED tắt";
             });
+        mcp.AddTool("self.led.breath", "LED thở", PropertyList({Property("speed", kPropertyTypeInteger, 3, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_ = {PATTERN_BREATH, p["speed"].value<int>(), 255, 0, true};
+                anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+                return "LED thở";
+            });
+        mcp.AddTool("self.led.blink", "LED nhấp nháy", PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
+                anim_led2_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
+                return "LED nhấp nháy";
+            });
         mcp.AddTool("self.led.auto", "LED tự động", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
@@ -806,7 +696,6 @@ public:
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
         InitializeSsd1306Display();
-        ShowEmotionEyesLvgl("neutral");
 #endif
 
         InitializeButtons();
