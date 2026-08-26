@@ -1,12 +1,12 @@
 #ifndef FACE_DISPLAY_H
 #define FACE_DISPLAY_H
 
-#include "display/oled_display.h"
+#include "display/oled_display.h"  // Dùng OledDisplay
 #include <string>
 
 class FaceDisplay {
 private:
-    Display* display_ = nullptr;
+    OledDisplay* display_ = nullptr;  // SỬA: Dùng OledDisplay thay vì Display
     std::string current_emotion_ = "";
     
     void DrawEye(int center_x, int center_y, int radius, bool blink = false);
@@ -15,7 +15,7 @@ private:
     void DrawFace(const std::string& emotion);
 
 public:
-    FaceDisplay(Display* display);
+    FaceDisplay(OledDisplay* display);  // SỬA: Nhận OledDisplay*
     ~FaceDisplay();
     
     void ShowNeutral();
