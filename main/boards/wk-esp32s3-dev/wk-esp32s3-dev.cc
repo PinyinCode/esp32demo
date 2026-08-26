@@ -24,6 +24,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
+#include <algorithm>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -226,6 +227,30 @@ private:
             board->UpdateLedCreative();
             vTaskDelay(pdMS_TO_TICKS(50));
         }
+    }
+
+    // ===== AUDIO SETUP =====
+    void InitializeAudio() {
+        ESP_LOGI(TAG, "========== AUDIO INITIALIZATION ==========");
+        ESP_LOGI(TAG, "Audio input sample rate: %d", AUDIO_INPUT_SAMPLE_RATE);
+        ESP_LOGI(TAG, "Audio output sample rate: %d", AUDIO_OUTPUT_SAMPLE_RATE);
+        
+        auto* audio_codec = GetAudioCodec();
+        if (audio_codec) {
+            audio_codec->Start();
+            audio_codec->SetOutputVolume(85);
+            audio_codec->SetOutputMute(false);
+            audio_codec->EnableInput(true);
+            audio_codec->EnableOutput(true);
+            ESP_LOGI(TAG, "Audio initialized with volume 85%%");
+        }
+        
+        auto& app = Application::GetInstance();
+        app.SetVolume(85);
+        
+        ESP_LOGI(TAG, "I2S pins: BCLK=%d, LRCK=%d, DOUT=%d", 
+                 AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT);
+        ESP_LOGI(TAG, "===========================================");
     }
 
     // ===== ĐỘNG CƠ DRV8833 với PWM =====
@@ -453,6 +478,15 @@ private:
                 return "Đã tắt LED 1";
             });
             
+        mcp.AddTool("self.led.toggle", "Bật/tắt LED 1",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                static bool state = false;
+                state = !state;
+                gpio_set_level(LED_1, state ? 1 : 0);
+                return state ? "LED 1 đang bật" : "LED 1 đang tắt";
+            });
+            
         mcp.AddTool("self.led2.on", "Bật LED 2",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
@@ -465,6 +499,15 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 gpio_set_level(LED_2, 0);
                 return "Đã tắt LED 2";
+            });
+            
+        mcp.AddTool("self.led2.toggle", "Bật/tắt LED 2",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                static bool state = false;
+                state = !state;
+                gpio_set_level(LED_2, state ? 1 : 0);
+                return state ? "LED 2 đang bật" : "LED 2 đang tắt";
             });
     }
 
@@ -494,6 +537,11 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
+        ESP_LOGI(TAG, "=== WK ESP32S3 Dev Board Initializing ===");
+        
+        // Initialize audio first
+        InitializeAudio();
+
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
         InitializeMotorMcp();
@@ -518,6 +566,8 @@ public:
 
         InitializeButtons();
         InitializeTools();
+        
+        ESP_LOGI(TAG, "=== Board initialization complete ===");
     }
 
     bool ReadMotionDetected() {
@@ -587,14 +637,30 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-        static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-             AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, I2S_STD_SLOT_RIGHT,
-            AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN, I2S_STD_SLOT_LEFT);
-#else
-        static NoAudioCodecDuplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN);
-#endif
+        static NoAudioCodecSimplex audio_codec(
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_SPK_GPIO_BCLK,
+            AUDIO_I2S_SPK_GPIO_LRCK,
+            AUDIO_I2S_SPK_GPIO_DOUT,
+            I2S_STD_SLOT_RIGHT,
+            AUDIO_I2S_MIC_GPIO_SCK,
+            AUDIO_I2S_MIC_GPIO_WS,
+            AUDIO_I2S_MIC_GPIO_DIN,
+            I2S_STD_SLOT_LEFT
+        );
         return &audio_codec;
+#else
+        static NoAudioCodecDuplex audio_codec(
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_BCLK,
+            AUDIO_I2S_GPIO_WS,
+            AUDIO_I2S_GPIO_DOUT,
+            AUDIO_I2S_GPIO_DIN
+        );
+        return &audio_codec;
+#endif
     }
 
     virtual Display* GetDisplay() override {
