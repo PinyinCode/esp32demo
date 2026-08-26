@@ -1,12 +1,11 @@
 #include "motor_controller.h"
-#include "config.h"  // THÊM: Include config.h
 #include "mcp_server.h"
 #include <esp_log.h>
-#include <algorithm>
 
 #define TAG "MotorController"
 
-MotorController::MotorController() {
+MotorController::MotorController(gpio_num_t in1, gpio_num_t in2, gpio_num_t in3, gpio_num_t in4)
+    : in1_(in1), in2_(in2), in3_(in3), in4_(in4) {
     InitializeMotor();
     ESP_LOGI(TAG, "Motor Controller initialized");
 }
@@ -28,7 +27,7 @@ void MotorController::InitializeMotor() {
     ledc_timer_config(&timer);
     
     ledc_channel_config_t ch1 = {
-        .gpio_num = DRV8833_IN1,
+        .gpio_num = in1_,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_0,
         .timer_sel = LEDC_TIMER_0,
@@ -38,7 +37,7 @@ void MotorController::InitializeMotor() {
     ledc_channel_config(&ch1);
     
     ledc_channel_config_t ch2 = {
-        .gpio_num = DRV8833_IN2,
+        .gpio_num = in2_,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_1,
         .timer_sel = LEDC_TIMER_0,
@@ -48,7 +47,7 @@ void MotorController::InitializeMotor() {
     ledc_channel_config(&ch2);
     
     ledc_channel_config_t ch3 = {
-        .gpio_num = DRV8833_IN3,
+        .gpio_num = in3_,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_2,
         .timer_sel = LEDC_TIMER_0,
@@ -58,7 +57,7 @@ void MotorController::InitializeMotor() {
     ledc_channel_config(&ch3);
     
     ledc_channel_config_t ch4 = {
-        .gpio_num = DRV8833_IN4,
+        .gpio_num = in4_,
         .speed_mode = LEDC_LOW_SPEED_MODE,
         .channel = LEDC_CHANNEL_3,
         .timer_sel = LEDC_TIMER_0,
@@ -138,58 +137,38 @@ void MotorController::TurnRight(int speed) {
 void MotorController::InitializeMcp() {
     auto& mcp = McpServer::GetInstance();
     
-    mcp.AddTool("self.motor.left", "Điều khiển động cơ trái (speed: -100 đến 100)",
-        PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
+    mcp.AddTool("self.motor.forward", "Robot tiến",
+        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
         [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            SetLeftMotor(speed);
-            return "Motor trái: " + std::to_string(speed) + "%";
+            Forward(p["speed"].value<int>());
+            return "Tiến";
         });
         
-    mcp.AddTool("self.motor.right", "Điều khiển động cơ phải (speed: -100 đến 100)",
-        PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
+    mcp.AddTool("self.motor.backward", "Robot lùi",
+        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
         [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            SetRightMotor(speed);
-            return "Motor phải: " + std::to_string(speed) + "%";
+            Backward(p["speed"].value<int>());
+            return "Lùi";
         });
         
-    mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
+    mcp.AddTool("self.motor.turn_left", "Rẽ trái",
+        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
+        [this](const PropertyList& p) -> ReturnValue {
+            TurnLeft(p["speed"].value<int>());
+            return "Rẽ trái";
+        });
+        
+    mcp.AddTool("self.motor.turn_right", "Rẽ phải",
+        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
+        [this](const PropertyList& p) -> ReturnValue {
+            TurnRight(p["speed"].value<int>());
+            return "Rẽ phải";
+        });
+        
+    mcp.AddTool("self.motor.stop", "Dừng",
         PropertyList(),
         [this](const PropertyList& p) -> ReturnValue {
             StopAll();
-            return "Đã dừng động cơ";
-        });
-        
-    mcp.AddTool("self.motor.forward", "Robot tiến (speed: 0-100)",
-        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-        [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            Forward(speed);
-            return "Robot tiến với tốc độ " + std::to_string(speed) + "%";
-        });
-        
-    mcp.AddTool("self.motor.backward", "Robot lùi (speed: 0-100)",
-        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-        [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            Backward(speed);
-            return "Robot lùi với tốc độ " + std::to_string(speed) + "%";
-        });
-        
-    mcp.AddTool("self.motor.turn_left", "Robot rẽ trái (speed: 0-100)",
-        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-        [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            TurnLeft(speed);
-            return "Robot rẽ trái";
-        });
-        
-    mcp.AddTool("self.motor.turn_right", "Robot rẽ phải (speed: 0-100)",
-        PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
-        [this](const PropertyList& p) -> ReturnValue {
-            int speed = p["speed"].value<int>();
-            TurnRight(speed);
-            return "Robot rẽ phải";
+            return "Dừng";
         });
 }
