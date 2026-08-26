@@ -1,5 +1,5 @@
 #include "wifi_board.h"
-#include "codecs/max98357a_codec.h"  // THAY ĐỔI: Include codec mới
+#include "max98357a_codec.h"  // THAY ĐỔI: Include codec mới
 #include "display/lcd_display.h"
 #include "display/oled_display.h"
 #include "system_reset.h"
