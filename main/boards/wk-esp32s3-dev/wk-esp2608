@@ -1,5 +1,5 @@
 #include "wifi_board.h"
-#include "max98357a_codec.h"  // THAY ĐỔI: Include codec mới
+#include "max98357a_codec.h"
 #include "display/lcd_display.h"
 #include "display/oled_display.h"
 #include "system_reset.h"
@@ -24,6 +24,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <math.h>
+#include <algorithm>
+#include <string>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -67,11 +69,23 @@ private:
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
     adc_oneshot_unit_handle_t adc_handle_ = nullptr;
+    AudioCodec* audio_codec_ = nullptr;
+    int current_volume_ = 80;
 
     // LED animation variables
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
+    bool led_auto_mode_ = true;
+    
+    // LED timeout
+    uint32_t led_timeout_ms_ = 0;
+    uint32_t led_timeout_start_ = 0;
+    const int DEFAULT_LED_DURATION_ = 30;
+
+    // Emotion state
+    std::string current_emotion_ = "neutral";
+    bool emotion_auto_mode_ = true;
 
     friend class SensorController;
 
@@ -126,7 +140,10 @@ private:
     }
 
     void ApplyLedEffect(int led_pin, LedAnimation anim) {
-        if (!anim.active) return;
+        if (!anim.active) {
+            gpio_set_level((gpio_num_t)led_pin, 0);
+            return;
+        }
         
         int brightness = 0;
         uint32_t time = led_tick_;
@@ -164,56 +181,205 @@ private:
                 break;
         }
         
-        if (brightness > 200) {
-            gpio_set_level((gpio_num_t)led_pin, 1);
-        } else if (brightness > 50) {
-            gpio_set_level((gpio_num_t)led_pin, 1);
+        gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
+    }
+
+    void SetLedTimeout(int duration_seconds) {
+        if (duration_seconds <= 0) {
+            led_timeout_ms_ = 0;
         } else {
-            gpio_set_level((gpio_num_t)led_pin, 0);
+            led_timeout_ms_ = duration_seconds * 1000;
+            led_timeout_start_ = led_tick_;
+        }
+    }
+
+    // ===== EMOTION EXECUTION =====
+    void ExecuteEmotion(const std::string& emotion) {
+        if (emotion == current_emotion_ && emotion_auto_mode_ == false) return;
+        current_emotion_ = emotion;
+        emotion_auto_mode_ = false;
+        
+        ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
+        
+        if (emotion == "happy") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 5, 255, 0, true};
+            anim_led2_ = {PATTERN_BREATH, 5, 255, 0, true};
+            SetLedTimeout(5);
+            SetLeftMotor(40);
+            SetRightMotor(40);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            SetLeftMotor(-30);
+            SetRightMotor(-30);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "sad") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 1, 255, 0, true};
+            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+            SetLedTimeout(5);
+            SetLeftMotor(-20);
+            SetRightMotor(-20);
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "angry") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BLINK_FAST, 15, 255, 0, true};
+            anim_led2_ = {PATTERN_BLINK_FAST, 15, 255, 0, true};
+            SetLedTimeout(3);
+            SetLeftMotor(60);
+            SetRightMotor(60);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "scared") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BLINK_FAST, 25, 255, 0, true};
+            anim_led2_ = {PATTERN_BLINK_FAST, 25, 255, 0, true};
+            SetLedTimeout(3);
+            SetLeftMotor(-70);
+            SetRightMotor(-70);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+            for (int i = 0; i < 5; i++) {
+                SetLeftMotor(-30);
+                SetRightMotor(30);
+                vTaskDelay(pdMS_TO_TICKS(100));
+                SetLeftMotor(30);
+                SetRightMotor(-30);
+                vTaskDelay(pdMS_TO_TICKS(100));
+            }
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "love") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_HEARTBEAT, 5, 255, 0, true};
+            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+            SetLedTimeout(5);
+            for (int i = 0; i < 3; i++) {
+                SetLeftMotor(-20);
+                SetRightMotor(20);
+                vTaskDelay(pdMS_TO_TICKS(400));
+                SetLeftMotor(20);
+                SetRightMotor(-20);
+                vTaskDelay(pdMS_TO_TICKS(400));
+            }
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "confused") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BLINK_SLOW, 3, 255, 0, true};
+            anim_led2_ = {PATTERN_BLINK_SLOW, 3, 255, 0, true};
+            SetLedTimeout(3);
+            SetLeftMotor(-30);
+            SetRightMotor(30);
+            vTaskDelay(pdMS_TO_TICKS(400));
+            SetLeftMotor(30);
+            SetRightMotor(-30);
+            vTaskDelay(pdMS_TO_TICKS(400));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "neutral") {
+            led_auto_mode_ = true;
+            led_timeout_ms_ = 0;
+            emotion_auto_mode_ = true;
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "thinking") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 2, 255, 0, true};
+            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+            SetLedTimeout(10);
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "listening") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 3, 255, 0, true};
+            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+            SetLeftMotor(-15);
+            SetRightMotor(15);
+            vTaskDelay(pdMS_TO_TICKS(500));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+        else if (emotion == "speaking") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 4, 255, 0, true};
+            anim_led2_ = {PATTERN_BREATH, 4, 255, 0, true};
+            SetLeftMotor(15);
+            SetRightMotor(15);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            SetLeftMotor(-10);
+            SetRightMotor(-10);
+            vTaskDelay(pdMS_TO_TICKS(300));
+            SetLeftMotor(0);
+            SetRightMotor(0);
+        }
+    }
+
+    void UpdateEmotionByState() {
+        if (!emotion_auto_mode_) return;
+        auto& app = Application::GetInstance();
+        switch (app.GetDeviceState()) {
+            case kDeviceStateIdle: ExecuteEmotion("neutral"); break;
+            case kDeviceStateConnecting: ExecuteEmotion("thinking"); break;
+            case kDeviceStateListening: ExecuteEmotion("listening"); break;
+            case kDeviceStateSpeaking: ExecuteEmotion("speaking"); break;
+            default: ExecuteEmotion("neutral"); break;
         }
     }
 
     void UpdateLedCreative() {
-        auto& app = Application::GetInstance();
-        auto state = app.GetDeviceState();
         led_tick_ += 50;
         
-        switch (state) {
-            case kDeviceStateIdle:
-                anim_led1_.pattern = PATTERN_BREATH;
-                anim_led1_.speed = 3;
-                anim_led2_.pattern = PATTERN_OFF;
-                break;
-            case kDeviceStateConnecting:
-                anim_led1_.pattern = PATTERN_PULSE;
-                anim_led1_.speed = 8;
-                anim_led2_.pattern = PATTERN_PULSE;
-                anim_led2_.speed = 8;
-                break;
-            case kDeviceStateListening:
-                anim_led1_.pattern = PATTERN_BLINK_FAST;
-                anim_led1_.speed = 10;
-                anim_led2_.pattern = PATTERN_WAVE;
-                anim_led2_.speed = 7;
-                break;
-            case kDeviceStateSpeaking:
-                anim_led1_.pattern = PATTERN_HEARTBEAT;
-                anim_led1_.speed = 5;
-                anim_led2_.pattern = PATTERN_BREATH;
-                anim_led2_.speed = 4;
-                break;
-            case kDeviceStateStarting:
-                anim_led1_.pattern = PATTERN_BLINK_SLOW;
-                anim_led1_.speed = 5;
-                anim_led2_.pattern = PATTERN_BLINK_SLOW;
-                anim_led2_.speed = 5;
-                break;
-            default:
-                anim_led1_.pattern = PATTERN_BLINK_FAST;
-                anim_led1_.speed = 12;
-                anim_led2_.pattern = PATTERN_BLINK_FAST;
-                anim_led2_.speed = 12;
-                break;
+        if (led_tick_ % 500 == 0) {
+            UpdateEmotionByState();
+        }
+        
+        if (led_timeout_ms_ > 0) {
+            if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
+                led_timeout_ms_ = 0;
+                led_auto_mode_ = true;
+                emotion_auto_mode_ = true;
+                ESP_LOGI(TAG, "LED timeout, trở về chế độ tự động");
+            }
+        }
+        
+        if (led_auto_mode_) {
+            auto& app = Application::GetInstance();
+            switch (app.GetDeviceState()) {
+                case kDeviceStateIdle:
+                    anim_led1_.pattern = PATTERN_BREATH; anim_led1_.speed = 3; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_OFF; anim_led2_.active = false;
+                    break;
+                case kDeviceStateConnecting:
+                    anim_led1_.pattern = PATTERN_PULSE; anim_led1_.speed = 8; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_PULSE; anim_led2_.speed = 8; anim_led2_.active = true;
+                    break;
+                case kDeviceStateListening:
+                    anim_led1_.pattern = PATTERN_BLINK_FAST; anim_led1_.speed = 10; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_WAVE; anim_led2_.speed = 7; anim_led2_.active = true;
+                    break;
+                case kDeviceStateSpeaking:
+                    anim_led1_.pattern = PATTERN_HEARTBEAT; anim_led1_.speed = 5; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_BREATH; anim_led2_.speed = 4; anim_led2_.active = true;
+                    break;
+                default:
+                    anim_led1_.pattern = PATTERN_BLINK_FAST; anim_led1_.speed = 12; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_BLINK_FAST; anim_led2_.speed = 12; anim_led2_.active = true;
+                    break;
+            }
         }
         
         ApplyLedEffect(LED_1, anim_led1_);
@@ -228,7 +394,7 @@ private:
         }
     }
 
-    // ===== ĐỘNG CƠ DRV8833 với PWM =====
+    // ===== ĐỘNG CƠ DRV8833 =====
     void InitializeMotor() {
         ESP_LOGI(TAG, "Initialize Motor DRV8833 with PWM");
         
@@ -370,116 +536,130 @@ private:
         ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
     }
 
-    // ===== MCP: MOTOR với PWM =====
+    // ===== MCP: MOTOR =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         
-        mcp.AddTool("self.motor.left", "Điều khiển động cơ trái (speed: -100 đến 100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
-                SetLeftMotor(speed);
-                return "Motor trái: " + std::to_string(speed) + "%";
-            });
-            
-        mcp.AddTool("self.motor.right", "Điều khiển động cơ phải (speed: -100 đến 100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 0, -100, 100)}),
-            [this](const PropertyList& p) -> ReturnValue {
-                int speed = p["speed"].value<int>();
-                SetRightMotor(speed);
-                return "Motor phải: " + std::to_string(speed) + "%";
-            });
-            
-        mcp.AddTool("self.motor.stop", "Dừng tất cả động cơ",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                SetLeftMotor(0);
-                SetRightMotor(0);
-                return "Đã dừng động cơ";
-            });
-            
-        mcp.AddTool("self.motor.forward", "Robot tiến (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
+        mcp.AddTool("self.motor.forward", "Robot tiến", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(speed);
-                return "Robot tiến với tốc độ " + std::to_string(speed) + "%";
+                return "Tiến " + std::to_string(speed) + "%";
             });
-            
-        mcp.AddTool("self.motor.backward", "Robot lùi (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
+        mcp.AddTool("self.motor.backward", "Robot lùi", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
-                int speed = -p["speed"].value<int>();
-                SetLeftMotor(speed);
-                SetRightMotor(speed);
-                return "Robot lùi với tốc độ " + std::to_string(-speed) + "%";
+                int speed = p["speed"].value<int>();
+                SetLeftMotor(-speed);
+                SetRightMotor(-speed);
+                return "Lùi " + std::to_string(speed) + "%";
             });
-            
-        mcp.AddTool("self.motor.turn_left", "Robot rẽ trái (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
+        mcp.AddTool("self.motor.turn_left", "Rẽ trái", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(-speed);
                 SetRightMotor(speed);
-                return "Robot rẽ trái";
+                return "Rẽ trái";
             });
-            
-        mcp.AddTool("self.motor.turn_right", "Robot rẽ phải (speed: 0-100)",
-            PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
+        mcp.AddTool("self.motor.turn_right", "Rẽ phải", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed);
                 SetRightMotor(-speed);
-                return "Robot rẽ phải";
+                return "Rẽ phải";
+            });
+        mcp.AddTool("self.motor.stop", "Dừng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                SetLeftMotor(0);
+                SetRightMotor(0);
+                return "Dừng";
+            });
+    }
+
+    // ===== MCP: AUDIO =====
+    void InitializeVolumeMcp() {
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.audio.volume_set", "Đặt âm lượng", PropertyList({Property("volume", kPropertyTypeInteger, 80, 0, 100)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                current_volume_ = p["volume"].value<int>();
+                if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_);
+                return "Âm lượng: " + std::to_string(current_volume_) + "%";
             });
     }
 
     // ===== MCP: LED =====
     void InitializeLedMcp() {
         auto& mcp = McpServer::GetInstance();
-        
-        mcp.AddTool("self.led.on", "Bật LED 1",
-            PropertyList(),
+        mcp.AddTool("self.led.on", "Bật LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
                 gpio_set_level(LED_1, 1);
-                return "Đã bật LED 1";
-            });
-            
-        mcp.AddTool("self.led.off", "Tắt LED 1",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                gpio_set_level(LED_1, 0);
-                return "Đã tắt LED 1";
-            });
-            
-        mcp.AddTool("self.led2.on", "Bật LED 2",
-            PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
                 gpio_set_level(LED_2, 1);
-                return "Đã bật LED 2";
+                return "LED bật";
             });
-            
-        mcp.AddTool("self.led2.off", "Tắt LED 2",
-            PropertyList(),
+        mcp.AddTool("self.led.off", "Tắt LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = true;
+                gpio_set_level(LED_1, 0);
                 gpio_set_level(LED_2, 0);
-                return "Đã tắt LED 2";
+                return "LED tắt";
+            });
+        mcp.AddTool("self.led.breath", "LED thở", PropertyList({Property("speed", kPropertyTypeInteger, 3, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_ = {PATTERN_BREATH, p["speed"].value<int>(), 255, 0, true};
+                anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+                return "LED thở";
+            });
+        mcp.AddTool("self.led.blink", "LED nhấp nháy", PropertyList({Property("speed", kPropertyTypeInteger, 5, 1, 20)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = false;
+                anim_led1_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
+                anim_led2_ = {PATTERN_BLINK_FAST, p["speed"].value<int>(), 255, 0, true};
+                return "LED nhấp nháy";
+            });
+        mcp.AddTool("self.led.auto", "LED tự động", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                led_auto_mode_ = true;
+                return "OK";
+            });
+    }
+
+    // ===== MCP: EMOTION =====
+    void InitializeEmotionMcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.emotion.set", "Đặt cảm xúc", PropertyList({Property("emotion", kPropertyTypeString, "neutral")}),
+            [this](const PropertyList& p) -> ReturnValue {
+                ExecuteEmotion(p["emotion"].value<std::string>());
+                return "OK";
+            });
+        mcp.AddTool("self.emotion.happy", "Vui vẻ", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("happy"); return "Vui!"; });
+        mcp.AddTool("self.emotion.sad", "Buồn", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("sad"); return "Buồn"; });
+        mcp.AddTool("self.emotion.angry", "Giận dữ", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("angry"); return "Giận!"; });
+        mcp.AddTool("self.emotion.scared", "Sợ hãi", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("scared"); return "Sợ!"; });
+        mcp.AddTool("self.emotion.love", "Yêu thương", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue { ExecuteEmotion("love"); return "Yêu!"; });
+        mcp.AddTool("self.emotion.auto", "Tự động", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                emotion_auto_mode_ = true;
+                led_auto_mode_ = true;
+                return "OK";
             });
     }
 
     // ===== MCP: BATTERY =====
     void InitializeBatteryMcp() {
         auto& mcp = McpServer::GetInstance();
-        mcp.AddTool("self.battery.level", "Mức pin (%)",
-            PropertyList(),
+        mcp.AddTool("self.battery.level", "Mức pin", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 int adc_value = 0;
                 adc_oneshot_read(adc_handle_, POWER_ADC_CHANNEL, &adc_value);
-                int level = (adc_value * 100) / 4095;
-                char result[32];
-                snprintf(result, sizeof(result), "%d%%", level);
-                return std::string(result);
+                return std::to_string((adc_value * 100) / 4095) + "%";
             });
     }
 
@@ -504,6 +684,8 @@ public:
         InitializeSensorMcp();
         InitializeLedGpio();
         InitializeLedMcp();
+        InitializeEmotionMcp();
+        InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
 
@@ -518,6 +700,11 @@ public:
 
         InitializeButtons();
         InitializeTools();
+        
+        audio_codec_ = GetAudioCodec();
+        if (audio_codec_) {
+            audio_codec_->SetOutputVolume(current_volume_);
+        }
     }
 
     bool ReadMotionDetected() {
@@ -585,17 +772,16 @@ public:
         return &led;
     }
 
-    // ===== THAY ĐỔI: Sử dụng Max98357aCodec =====
     virtual AudioCodec* GetAudioCodec() override {
         static Max98357aCodec audio_codec(
-            AUDIO_INPUT_SAMPLE_RATE,           // 16000
-            AUDIO_OUTPUT_SAMPLE_RATE,          // 24000
-            (gpio_num_t)AUDIO_I2S_SPK_GPIO_BCLK,  // GPIO 15
-            (gpio_num_t)AUDIO_I2S_SPK_GPIO_LRCK,  // GPIO 16
-            (gpio_num_t)AUDIO_I2S_SPK_GPIO_DOUT,  // GPIO 7
-            (gpio_num_t)AUDIO_I2S_MIC_GPIO_SCK,   // GPIO 5
-            (gpio_num_t)AUDIO_I2S_MIC_GPIO_WS,    // GPIO 4
-            (gpio_num_t)AUDIO_I2S_MIC_GPIO_DIN    // GPIO 6
+            AUDIO_INPUT_SAMPLE_RATE,
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            (gpio_num_t)AUDIO_I2S_SPK_GPIO_BCLK,
+            (gpio_num_t)AUDIO_I2S_SPK_GPIO_LRCK,
+            (gpio_num_t)AUDIO_I2S_SPK_GPIO_DOUT,
+            (gpio_num_t)AUDIO_I2S_MIC_GPIO_SCK,
+            (gpio_num_t)AUDIO_I2S_MIC_GPIO_WS,
+            (gpio_num_t)AUDIO_I2S_MIC_GPIO_DIN
         );
         return &audio_codec;
     }
