@@ -73,6 +73,10 @@ private:
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
 
+    // Audio variables
+    int current_volume_ = 85;  // MAX98357A cần volume cao
+    AudioCodec* audio_codec_ = nullptr;
+
     friend class SensorController;
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -228,6 +232,46 @@ private:
         }
     }
 
+    // ===== AUDIO SETUP =====
+    void InitializeAudio() {
+        ESP_LOGI(TAG, "========== AUDIO INITIALIZATION ==========");
+        ESP_LOGI(TAG, "Audio input sample rate: %d", AUDIO_INPUT_SAMPLE_RATE);
+        ESP_LOGI(TAG, "Audio output sample rate: %d", AUDIO_OUTPUT_SAMPLE_RATE);
+        
+        // Get audio codec instance
+        audio_codec_ = GetAudioCodec();
+        if (audio_codec_) {
+            ESP_LOGI(TAG, "Audio codec created successfully");
+            
+            // Set default volume
+            audio_codec_->SetOutputVolume(current_volume_);
+            ESP_LOGI(TAG, "Set volume to: %d%%", current_volume_);
+            
+            // Unmute audio
+            audio_codec_->SetOutputMute(false);
+            ESP_LOGI(TAG, "Audio unmuted");
+            
+            // Enable input and output
+            audio_codec_->EnableInput(true);
+            audio_codec_->EnableOutput(true);
+            ESP_LOGI(TAG, "Input and output enabled");
+        } else {
+            ESP_LOGE(TAG, "Failed to create audio codec!");
+        }
+        
+        // Also set volume through Application
+        auto& app = Application::GetInstance();
+        app.SetVolume(current_volume_);
+        
+        ESP_LOGI(TAG, "Audio initialization complete. Volume: %d%%", current_volume_);
+        ESP_LOGI(TAG, "I2S pins:");
+        ESP_LOGI(TAG, "  SPK: BCLK=%d, LRCK=%d, DOUT=%d", 
+                 AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT);
+        ESP_LOGI(TAG, "  MIC: SCK=%d, WS=%d, DIN=%d", 
+                 AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN);
+        ESP_LOGI(TAG, "===========================================");
+    }
+
     // ===== ĐỘNG CƠ DRV8833 với PWM =====
     void InitializeMotor() {
         ESP_LOGI(TAG, "Initialize Motor DRV8833 with PWM");
@@ -334,11 +378,13 @@ private:
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
+        ESP_LOGI(TAG, "PIR sensor initialized on GPIO %d", PIR_MOTION_SENSOR_PIN);
     }
 
     // ===== ULTRASONIC =====
     void InitializeUltrasonic() {
-        ESP_LOGI(TAG, "Initialize Ultrasonic Sensor");
+        ESP_LOGI(TAG, "Initialize Ultrasonic Sensor (I2C: SCL=%d, SDA=%d)", 
+                 ULTRASONIC_SCL_PIN, ULTRASONIC_SDA_PIN);
     }
 
     // ===== LED GPIO =====
@@ -353,6 +399,7 @@ private:
         gpio_config(&io_conf);
         gpio_set_level(LED_1, 0);
         gpio_set_level(LED_2, 0);
+        ESP_LOGI(TAG, "LEDs initialized: LED1=%d, LED2=%d", LED_1, LED_2);
     }
 
     // ===== ADC =====
@@ -368,6 +415,100 @@ private:
             .bitwidth = ADC_BITWIDTH_12,
         };
         ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config));
+        ESP_LOGI(TAG, "ADC initialized for battery monitoring");
+    }
+
+    // ===== MCP: AUDIO =====
+    void InitializeAudioMcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.audio.volume", "Đặt âm lượng (0-100)",
+            PropertyList({Property("level", kPropertyTypeInteger, 85, 0, 100)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int level = p["level"].value<int>();
+                level = std::max(0, std::min(100, level));
+                current_volume_ = level;
+                
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(level);
+                    ESP_LOGI(TAG, "Volume set to %d%%", level);
+                }
+                auto& app = Application::GetInstance();
+                app.SetVolume(level);
+                
+                char result[64];
+                snprintf(result, sizeof(result), "Đã đặt âm lượng: %d%%", level);
+                return std::string(result);
+            });
+            
+        mcp.AddTool("self.audio.volume_up", "Tăng âm lượng lên 10%%",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                current_volume_ = std::min(100, current_volume_ + 10);
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(current_volume_);
+                }
+                auto& app = Application::GetInstance();
+                app.SetVolume(current_volume_);
+                
+                char result[64];
+                snprintf(result, sizeof(result), "Âm lượng: %d%%", current_volume_);
+                return std::string(result);
+            });
+            
+        mcp.AddTool("self.audio.volume_down", "Giảm âm lượng xuống 10%%",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                current_volume_ = std::max(0, current_volume_ - 10);
+                if (audio_codec_) {
+                    audio_codec_->SetOutputVolume(current_volume_);
+                }
+                auto& app = Application::GetInstance();
+                app.SetVolume(current_volume_);
+                
+                char result[64];
+                snprintf(result, sizeof(result), "Âm lượng: %d%%", current_volume_);
+                return std::string(result);
+            });
+            
+        mcp.AddTool("self.audio.mute", "Tắt âm thanh",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (audio_codec_) {
+                    audio_codec_->SetOutputMute(true);
+                }
+                auto& app = Application::GetInstance();
+                app.SetVolume(0);
+                return "Đã tắt âm thanh";
+            });
+            
+        mcp.AddTool("self.audio.unmute", "Bật âm thanh",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (audio_codec_) {
+                    audio_codec_->SetOutputMute(false);
+                    audio_codec_->SetOutputVolume(current_volume_ > 0 ? current_volume_ : 85);
+                }
+                auto& app = Application::GetInstance();
+                app.SetVolume(current_volume_ > 0 ? current_volume_ : 85);
+                return "Đã bật âm thanh";
+            });
+            
+        mcp.AddTool("self.audio.status", "Trạng thái âm lượng",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                char result[128];
+                snprintf(result, sizeof(result), 
+                    "Âm lượng: %d%% | Codec: NoAudioCodecSimplex | I2S pins: BCLK=%d, LRCK=%d, DOUT=%d, SCK=%d, WS=%d, DIN=%d", 
+                    current_volume_,
+                    AUDIO_I2S_SPK_GPIO_BCLK,
+                    AUDIO_I2S_SPK_GPIO_LRCK,
+                    AUDIO_I2S_SPK_GPIO_DOUT,
+                    AUDIO_I2S_MIC_GPIO_SCK,
+                    AUDIO_I2S_MIC_GPIO_WS,
+                    AUDIO_I2S_MIC_GPIO_DIN);
+                return std::string(result);
+            });
     }
 
     // ===== MCP: MOTOR với PWM =====
@@ -453,6 +594,15 @@ private:
                 return "Đã tắt LED 1";
             });
             
+        mcp.AddTool("self.led.toggle", "Bật/tắt LED 1",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                static bool state = false;
+                state = !state;
+                gpio_set_level(LED_1, state ? 1 : 0);
+                return state ? "LED 1 đang bật" : "LED 1 đang tắt";
+            });
+            
         mcp.AddTool("self.led2.on", "Bật LED 2",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
@@ -465,6 +615,15 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 gpio_set_level(LED_2, 0);
                 return "Đã tắt LED 2";
+            });
+            
+        mcp.AddTool("self.led2.toggle", "Bật/tắt LED 2",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                static bool state = false;
+                state = !state;
+                gpio_set_level(LED_2, state ? 1 : 0);
+                return state ? "LED 2 đang bật" : "LED 2 đang tắt";
             });
     }
 
@@ -494,6 +653,12 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
+        ESP_LOGI(TAG, "=== WK ESP32S3 Dev Board Initializing ===");
+        
+        // Initialize audio first
+        InitializeAudio();
+        InitializeAudioMcp();
+
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
         InitializeMotorMcp();
@@ -518,6 +683,9 @@ public:
 
         InitializeButtons();
         InitializeTools();
+        
+        ESP_LOGI(TAG, "=== Board initialization complete ===");
+        ESP_LOGI(TAG, "Audio volume: %d%%", current_volume_);
     }
 
     bool ReadMotionDetected() {
@@ -535,6 +703,7 @@ public:
             .flags = {.enable_internal_pullup = 1},
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &display_i2c_bus_));
+        ESP_LOGI(TAG, "Display I2C initialized: SDA=%d, SCL=%d", DISPLAY_SDA_PIN, DISPLAY_SCL_PIN);
     }
 
     void InitializeSsd1306Display() {
@@ -563,6 +732,7 @@ public:
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
         display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+        ESP_LOGI(TAG, "SSD1306 Display initialized: %dx%d", DISPLAY_WIDTH, DISPLAY_HEIGHT);
     }
 #endif
 
@@ -575,6 +745,7 @@ public:
             }
             app.ToggleChatState();
         });
+        ESP_LOGI(TAG, "Buttons initialized");
     }
 
     void InitializeTools() {
@@ -587,14 +758,31 @@ public:
 
     virtual AudioCodec* GetAudioCodec() override {
 #ifdef AUDIO_I2S_METHOD_SIMPLEX
-        static NoAudioCodecSimplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-             AUDIO_I2S_SPK_GPIO_BCLK, AUDIO_I2S_SPK_GPIO_LRCK, AUDIO_I2S_SPK_GPIO_DOUT, I2S_STD_SLOT_RIGHT,
-            AUDIO_I2S_MIC_GPIO_SCK, AUDIO_I2S_MIC_GPIO_WS, AUDIO_I2S_MIC_GPIO_DIN, I2S_STD_SLOT_LEFT);
-#else
-        static NoAudioCodecDuplex audio_codec(AUDIO_INPUT_SAMPLE_RATE, AUDIO_OUTPUT_SAMPLE_RATE,
-            AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN);
-#endif
+        // Sử dụng NoAudioCodecSimplex với cấu hình cho MAX98357A và INMP441
+        static NoAudioCodecSimplex audio_codec(
+            AUDIO_INPUT_SAMPLE_RATE,    // 16000
+            AUDIO_OUTPUT_SAMPLE_RATE,   // 24000
+            AUDIO_I2S_SPK_GPIO_BCLK,    // 15 - BCLK cho loa
+            AUDIO_I2S_SPK_GPIO_LRCK,    // 16 - LRCK cho loa
+            AUDIO_I2S_SPK_GPIO_DOUT,    // 7  - DOUT cho loa
+            I2S_STD_SLOT_RIGHT,         // MAX98357A thường dùng Right Channel
+            AUDIO_I2S_MIC_GPIO_SCK,     // 5  - SCK cho mic
+            AUDIO_I2S_MIC_GPIO_WS,      // 4  - WS cho mic
+            AUDIO_I2S_MIC_GPIO_DIN,     // 6  - DIN cho mic
+            I2S_STD_SLOT_LEFT           // INMP441 thường dùng Left Channel
+        );
         return &audio_codec;
+#else
+        static NoAudioCodecDuplex audio_codec(
+            AUDIO_INPUT_SAMPLE_RATE, 
+            AUDIO_OUTPUT_SAMPLE_RATE,
+            AUDIO_I2S_GPIO_BCLK, 
+            AUDIO_I2S_GPIO_WS, 
+            AUDIO_I2S_GPIO_DOUT, 
+            AUDIO_I2S_GPIO_DIN
+        );
+        return &audio_codec;
+#endif
     }
 
     virtual Display* GetDisplay() override {
