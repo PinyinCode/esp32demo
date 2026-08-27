@@ -72,52 +72,61 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // LED animation variables
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
     bool led_auto_mode_ = true;
     
-    // LED timeout
     uint32_t led_timeout_ms_ = 0;
     uint32_t led_timeout_start_ = 0;
     const int DEFAULT_LED_DURATION_ = 30;
 
-    // Emotion state
     std::string current_emotion_ = "neutral";
     bool emotion_auto_mode_ = true;
     bool is_blinking_ = false;
 
     friend class SensorController;
 
-    // ===== HIỂN THỊ MẮT ĐỘNG (THAY THẾ EMOJI TĨNH) =====
-    // Hàm vẽ 2 mắt (dùng FillRect cho OLED đơn sắc)
-    // eye_type: 0=Mở, 1=Nhắm (chớp), 2=Híp (vui vẻ)
-    void DrawEyes(int width, int height, int eye_type) {
+    // ==========================================
+    //  HIỂN THỊ MẮT ĐỘNG DÙNG API CHUẨN CỦA DISPLAY
+    // ==========================================
+    void UpdateDisplayAnimation() {
         if (!display_) return;
 
-        display_->SetDrawBuffer(); // Chuẩn bị vùng đệm
-        display_->Clear();         // Xóa màn hình cũ
-
-        // Tọa độ trung tâm của 2 mắt trên màn hình 128x64
-        int eye_y = 28; 
-        int left_x = 35;
-        int right_x = 90;
-
-        if (eye_type == 1) { // NHẮM MẮT (Chỉ là 1 đường kẻ ngang)
-            display_->FillRect(left_x - 10, eye_y, 20, 2, 1);
-            display_->FillRect(right_x - 10, eye_y, 20, 2, 1);
-        } else if (eye_type == 2) { // HÍP MẮT (Khi vui)
-            display_->FillRect(left_x - (width/2), eye_y - 3, width, 6, 1);
-            display_->FillRect(right_x - (width/2), eye_y - 3, width, 6, 1);
-        } else { // MẮT MỞ (Mặc định)
-            display_->FillRect(left_x - (width/2), eye_y - (height/2), width, height, 1);
-            display_->FillRect(right_x - (width/2), eye_y - (height/2), width, height, 1);
+        auto& app = Application::GetInstance();
+        
+        // Logic chớp mắt (mỗi 4 giây chớp 1 lần, kéo dài 150ms)
+        static uint32_t last_blink_time = 0;
+        uint32_t now_ms = esp_timer_get_time() / 1000;
+        if (!is_blinking_ && (now_ms - last_blink_time > 4000)) {
+            is_blinking_ = true;
+            last_blink_time = now_ms;
+        } else if (is_blinking_ && (now_ms - last_blink_time > 150)) {
+            is_blinking_ = false;
         }
 
-        // Vẽ dòng trạng thái bên dưới
+        // Chọn hình dạng mắt (dùng ký tự đơn giản cho OLED)
+        std::string eyes;
+        if (is_blinking_) {
+            eyes = "- -"; // Mắt nhắm
+        } else if (current_emotion_ == "happy") {
+            eyes = "^ ^"; // Mắt cười
+        } else if (current_emotion_ == "sad") {
+            eyes = "v v"; // Mắt buồn
+        } else if (app.GetDeviceState() == kDeviceStateListening) {
+            eyes = "O O"; // Mắt to khi nghe
+        } else if (app.GetDeviceState() == kDeviceStateSpeaking) {
+            // Khi nói: mắt to rồi nhỏ lại liên tục
+            static int frame = 0;
+            frame++;
+            eyes = (frame % 4 == 0) ? "o o" : "O O";
+        } else {
+            eyes = "O O"; // Mắt mở bình thường
+        }
+
+        // Cập nhật lên màn hình bằng API chuẩn
+        display_->SetEmotion(eyes.c_str());
         display_->SetStatus(GetStatusText().c_str());
-        display_->PushBuffer(); // Đẩy lên màn hình
     }
 
     std::string GetStatusText() {
@@ -131,45 +140,10 @@ private:
         }
     }
 
-    // Cập nhật Animation mắt (Chạy mỗi 50ms trong task)
-    void UpdateDisplayAnimation() {
-        if (!display_) return;
-
-        auto& app = Application::GetInstance();
-        
-        // Tự động chớp mắt mỗi 4 giây (nhắm 150ms)
-        static uint32_t last_blink_time = 0;
-        uint32_t now_ms = esp_timer_get_time() / 1000;
-        if (!is_blinking_ && (now_ms - last_blink_time > 4000)) {
-            is_blinking_ = true;
-            last_blink_time = now_ms;
-        } else if (is_blinking_ && (now_ms - last_blink_time > 150)) {
-            is_blinking_ = false;
-        }
-
-        // Thay đổi hình dáng mắt theo trạng thái
-        if (is_blinking_) {
-            DrawEyes(0, 0, 1); // Nhắm mắt
-        } else if (current_emotion_ == "happy") {
-            DrawEyes(24, 24, 2); // Vui -> Híp mắt cười
-        } else if (app.GetDeviceState() == kDeviceStateListening) {
-            DrawEyes(26, 30, 0); // Nghe -> Mắt to tròn
-        } else if (app.GetDeviceState() == kDeviceStateSpeaking) {
-            // Khi nói -> Mắt phồng lên xẹp xuống
-            static int frame = 0;
-            frame++;
-            if (frame % 4 == 0) DrawEyes(24, 22, 0);
-            else DrawEyes(24, 26, 0);
-        } else if (current_emotion_ == "sad") {
-            DrawEyes(18, 12, 0); // Buồn -> Mắt nhỏ hơn
-        } else {
-            DrawEyes(22, 24, 0); // Mặc định
-        }
-    }
-
-    // ===== LOGIC HIỂN THỊ CẢM XÚC (Giữ nguyên nhưng không dùng Emoji Unicode) =====
+    // Hàm giữ để tương thích với logic cũ, nhưng không còn lỗi
     void ShowEmotionDisplay(const std::string& emotion) {
-        current_emotion_ = emotion; // Hàm UpdateDisplayAnimation sẽ tự vẽ theo biến này
+        current_emotion_ = emotion;
+        // Animation sẽ được vẽ liên tục trong UpdateDisplayAnimation
     }
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -264,66 +238,52 @@ private:
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
         
-        // Cập nhật mắt theo cảm xúc
         ShowEmotionDisplay(emotion);
         
-        // Điều khiển LED + Motor theo cảm xúc
         if (emotion == "happy") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 5, 255, 0, true};
             anim_led2_ = {PATTERN_BREATH, 5, 255, 0, true};
             SetLedTimeout(5);
-            SetLeftMotor(40);
-            SetRightMotor(40);
+            SetLeftMotor(40); SetRightMotor(40);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(-30);
-            SetRightMotor(-30);
+            SetLeftMotor(-30); SetRightMotor(-30);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "sad") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 1, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(5);
-            SetLeftMotor(-20);
-            SetRightMotor(-20);
+            SetLeftMotor(-20); SetRightMotor(-20);
             vTaskDelay(pdMS_TO_TICKS(1000));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "angry") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BLINK_FAST, 15, 255, 0, true};
             anim_led2_ = {PATTERN_BLINK_FAST, 15, 255, 0, true};
             SetLedTimeout(3);
-            SetLeftMotor(60);
-            SetRightMotor(60);
+            SetLeftMotor(60); SetRightMotor(60);
             vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "scared") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BLINK_FAST, 25, 255, 0, true};
             anim_led2_ = {PATTERN_BLINK_FAST, 25, 255, 0, true};
             SetLedTimeout(3);
-            SetLeftMotor(-70);
-            SetRightMotor(-70);
+            SetLeftMotor(-70); SetRightMotor(-70);
             vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
             for (int i = 0; i < 5; i++) {
-                SetLeftMotor(-30);
-                SetRightMotor(30);
+                SetLeftMotor(-30); SetRightMotor(30);
                 vTaskDelay(pdMS_TO_TICKS(100));
-                SetLeftMotor(30);
-                SetRightMotor(-30);
+                SetLeftMotor(30); SetRightMotor(-30);
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "love") {
             led_auto_mode_ = false;
@@ -331,67 +291,43 @@ private:
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(5);
             for (int i = 0; i < 3; i++) {
-                SetLeftMotor(-20);
-                SetRightMotor(20);
+                SetLeftMotor(-20); SetRightMotor(20);
                 vTaskDelay(pdMS_TO_TICKS(400));
-                SetLeftMotor(20);
-                SetRightMotor(-20);
+                SetLeftMotor(20); SetRightMotor(-20);
                 vTaskDelay(pdMS_TO_TICKS(400));
             }
-            SetLeftMotor(0);
-            SetRightMotor(0);
-        }
-        else if (emotion == "confused") {
-            led_auto_mode_ = false;
-            anim_led1_ = {PATTERN_BLINK_SLOW, 3, 255, 0, true};
-            anim_led2_ = {PATTERN_BLINK_SLOW, 3, 255, 0, true};
-            SetLedTimeout(3);
-            SetLeftMotor(-30);
-            SetRightMotor(30);
-            vTaskDelay(pdMS_TO_TICKS(400));
-            SetLeftMotor(30);
-            SetRightMotor(-30);
-            vTaskDelay(pdMS_TO_TICKS(400));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "neutral") {
             led_auto_mode_ = true;
             led_timeout_ms_ = 0;
             emotion_auto_mode_ = true;
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "thinking") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 2, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(10);
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "listening") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 3, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
-            SetLeftMotor(-15);
-            SetRightMotor(15);
+            SetLeftMotor(-15); SetRightMotor(15);
             vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "speaking") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 4, 255, 0, true};
             anim_led2_ = {PATTERN_BREATH, 4, 255, 0, true};
-            SetLeftMotor(15);
-            SetRightMotor(15);
+            SetLeftMotor(15); SetRightMotor(15);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(-10);
-            SetRightMotor(-10);
+            SetLeftMotor(-10); SetRightMotor(-10);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
     }
 
@@ -457,7 +393,7 @@ private:
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (1) {
             board->UpdateLedCreative();
-            board->UpdateDisplayAnimation(); // Thêm dòng này để vẽ mắt liên tục
+            board->UpdateDisplayAnimation(); // <-- THÊM DÒNG NÀY
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
