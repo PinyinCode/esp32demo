@@ -3,9 +3,6 @@
 
 #include "lvgl_display.h"
 
-// ==== THÊM DÒNG NÀY ĐỂ NHÌN THẤY lv_timer_t ====
-#include <lvgl.h> 
-
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <string>
@@ -28,7 +25,7 @@ private:
     // ==== BIẾN MẮT ĐỘNG ====
     lv_obj_t* eye_left_ = nullptr;
     lv_obj_t* eye_right_ = nullptr;
-    lv_timer_t* eye_timer_ = nullptr; // Cần có #include <lvgl.h> ở trên
+    lv_timer_t* eye_timer_ = nullptr;
     int eye_state_ = 0; // 0: Mở, 1: Nhắm, 2: Híp vui, 3: To tròn
     bool is_blinking_ = false;
     std::string current_emotion_ = "neutral";
