@@ -14,6 +14,10 @@
 #include <noto_emoji.h>
 
 #define TAG "OledDisplay"
+#define COLOR_WHITE lv_color_hex(0xFFFFFF)
+#define COLOR_GRAY   lv_color_hex(0xAAAAAA)
+#define COLOR_DIM    lv_color_hex(0x555555)
+#define COLOR_BLACK  lv_color_hex(0x000000)
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
@@ -98,7 +102,7 @@ void OledDisplay::SetupUI() {
     }
 }
 
-// ==== HÀM KHỞI TẠO MẮT (ĐÃ CHỈNH TỌA ĐỘ CHUẨN) ====
+// ==== KHỞI TẠO MẮT (ĐÃ CHỈNH TỌA ĐỘ CHUẨN) ====
 void OledDisplay::InitEyes() {
     DisplayLockGuard lock(this);
     auto screen = lv_screen_active();
@@ -108,13 +112,13 @@ void OledDisplay::InitEyes() {
         lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Tạo mắt trái (Đặt y=24 để chừa chỗ cho phụ đề dưới đáy)
+    // Tạo mắt trái
     eye_left_ = lv_obj_create(screen);
     lv_obj_set_size(eye_left_, 22, 26);
     lv_obj_set_pos(eye_left_, 20, 24);
     lv_obj_set_style_border_width(eye_left_, 0, 0);
     lv_obj_set_style_bg_opa(eye_left_, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(eye_left_, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(eye_left_, COLOR_WHITE, 0);
     lv_obj_set_style_radius(eye_left_, 11, 0);
 
     // Tạo mắt phải
@@ -123,11 +127,38 @@ void OledDisplay::InitEyes() {
     lv_obj_set_pos(eye_right_, 80, 24);
     lv_obj_set_style_border_width(eye_right_, 0, 0);
     lv_obj_set_style_bg_opa(eye_right_, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(eye_right_, lv_color_white(), 0);
+    lv_obj_set_style_bg_color(eye_right_, COLOR_WHITE, 0);
     lv_obj_set_style_radius(eye_right_, 11, 0);
 
     // Timer để mắt tự chớp và tự đổi theo trạng thái
     eye_timer_ = lv_timer_create(EyeTimerCallback, 100, this);
+}
+
+// ==== HÀM ĐỔI MÀU MẮT THEO CẢM XÚC ====
+void OledDisplay::UpdateEyeColor() {
+    DisplayLockGuard lock(this);
+    if (!eye_left_ || !eye_right_) return;
+
+    lv_color_t eye_color = COLOR_WHITE;
+
+    if (current_emotion_ == "happy") {
+        eye_color = COLOR_WHITE;       // Vui: Mắt sáng rõ
+    } else if (current_emotion_ == "sad") {
+        eye_color = COLOR_DIM;         // Buồn: Mắt tối, mờ
+    } else if (current_emotion_ == "angry") {
+        eye_color = COLOR_BLACK;       // Giận: Mắt tối đen
+    } else if (current_emotion_ == "scared") {
+        eye_color = COLOR_GRAY;        // Sợ: Mắt xám
+    } else if (current_emotion_ == "love") {
+        eye_color = COLOR_WHITE;       // Yêu: Mắt sáng
+    } else if (current_emotion_ == "thinking") {
+        eye_color = COLOR_GRAY;        // Suy nghĩ: Mắt xám
+    } else {
+        eye_color = COLOR_WHITE;       // Trung lập: Mắt trắng sáng
+    }
+
+    lv_obj_set_style_bg_color(eye_left_, eye_color, 0);
+    lv_obj_set_style_bg_color(eye_right_, eye_color, 0);
 }
 
 // ==== HÀM CẬP NHẬT TRẠNG THÁI MẮT ====
@@ -194,12 +225,15 @@ void OledDisplay::EyeTimerCallback(lv_timer_t* timer) {
     }
 }
 
-// ==== SetEmotion: Điều khiển mắt theo cảm xúc ====
+// ==== SetEmotion: Điều khiển mắt theo cảm xúc + ĐỔI MÀU ====
 void OledDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
 
     if (eye_left_ == nullptr) InitEyes();
 
+    current_emotion_ = emotion;
+
+    // Đổi hình dạng mắt theo cảm xúc
     if (strcmp(emotion, "happy") == 0) {
         UpdateEyeState(2);
     } else if (strcmp(emotion, "sad") == 0) {
@@ -209,12 +243,9 @@ void OledDisplay::SetEmotion(const char* emotion) {
     } else {
         UpdateEyeState(0);
     }
-}
 
-// ==== HÀM SetStatus (Giữ nguyên phụ đề từ LvglDisplay) ====
-void OledDisplay::SetStatus(const char* status) {
-    // Gọi hàm SetStatus của lớp cha (LvglDisplay) để hiển thị phụ đề
-    LvglDisplay::SetStatus(status);
+    // Đổi màu mắt theo cảm xúc
+    UpdateEyeColor();
 }
 
 OledDisplay::~OledDisplay() {
@@ -338,7 +369,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_pad_all(status_bar_, 0, 0);
     lv_obj_set_scrollbar_mode(status_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_layout(status_bar_, LV_LAYOUT_NONE, 0);
-    lv_obj_align(status_bar_, LV_ALIGN_BOTTOM_MID, 0, 0); // Đặt xuống ĐÁY màn hình
+    lv_obj_align(status_bar_, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     notification_label_ = lv_label_create(status_bar_);
     lv_obj_set_width(notification_label_, LV_HOR_RES);
@@ -406,7 +437,6 @@ void OledDisplay::SetupUI_128x64() {
 }
 
 void OledDisplay::SetupUI_128x32() {
-    // (Giữ nguyên code cũ, thêm InitEyes() ở cuối)
     InitEyes();
 }
 
