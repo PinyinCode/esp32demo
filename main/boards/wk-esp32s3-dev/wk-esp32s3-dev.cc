@@ -27,7 +27,13 @@
 #include <algorithm>
 #include <string>
 
+// Include LVGL và LockGuard
+#include "lvgl.h"
+#include "display.h" // Để dùng DisplayLockGuard
+
 #define TAG "WkEsp32s3Dev"
+#define EYE_COLOR lv_color_hex(0xFFFFFF) // Mắt trắng
+#define EYE_BG_COLOR lv_color_hex(0x000000) // Nền đen
 
 class WkEsp32s3Dev;
 
@@ -39,15 +45,8 @@ public:
 
 // ===== LED PATTERNS =====
 enum LedPattern {
-    PATTERN_OFF = 0,
-    PATTERN_BREATH,
-    PATTERN_BLINK_FAST,
-    PATTERN_BLINK_SLOW,
-    PATTERN_HEARTBEAT,
-    PATTERN_WAVE,
-    PATTERN_COMET,
-    PATTERN_PULSE,
-    PATTERN_TWINKLE,
+    PATTERN_OFF = 0, PATTERN_BREATH, PATTERN_BLINK_FAST, PATTERN_BLINK_SLOW,
+    PATTERN_HEARTBEAT, PATTERN_WAVE, PATTERN_COMET, PATTERN_PULSE, PATTERN_TWINKLE,
 };
 
 struct LedAnimation {
@@ -85,17 +84,59 @@ private:
     bool emotion_auto_mode_ = true;
     bool is_blinking_ = false;
 
+    // ===== LVGL OBJECTS CHO MẮT =====
+    lv_obj_t* eye_left_ = nullptr;
+    lv_obj_t* eye_right_ = nullptr;
+
     friend class SensorController;
 
-    // ==========================================
-    //  HIỂN THỊ MẮT ĐỘNG DÙNG API CHUẨN CỦA DISPLAY
-    // ==========================================
+    // ===== HÀM KHỞI TẠO MẮT TRÊN LVGL =====
+    void InitEyes() {
+        if (!display_ || eye_left_) return; // Đã khởi tạo rồi thì thôi
+
+        // Lock màn hình trước khi vẽ
+        DisplayLockGuard lock(display_);
+
+        // Lấy màn hình gốc
+        lv_obj_t* screen = lv_scr_act();
+
+        // Tạo 2 vùng chứa mắt
+        eye_left_ = lv_obj_create(screen);
+        eye_right_ = lv_obj_create(screen);
+
+        // Xóa viền và đặt nền đen
+        lv_obj_set_style_border_width(eye_left_, 0, 0);
+        lv_obj_set_style_border_width(eye_right_, 0, 0);
+        lv_obj_set_style_bg_color(eye_left_, EYE_BG_COLOR, 0);
+        lv_obj_set_style_bg_color(eye_right_, EYE_BG_COLOR, 0);
+        
+        // Bật màu nền cho mắt
+        lv_obj_set_style_bg_opa(eye_left_, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_opa(eye_right_, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(eye_left_, EYE_COLOR, 0);
+        lv_obj_set_style_bg_color(eye_right_, EYE_COLOR, 0);
+
+        // Đặt vị trí và kích thước mặc định
+        lv_obj_set_pos(eye_left_, 30, 12);
+        lv_obj_set_pos(eye_right_, 80, 12);
+        lv_obj_set_size(eye_left_, 22, 24);
+        lv_obj_set_size(eye_right_, 22, 24);
+        
+        // Bo tròn góc
+        lv_obj_set_style_radius(eye_left_, 11, 0);
+        lv_obj_set_style_radius(eye_right_, 11, 0);
+    }
+
+    // ===== HÀM CẬP NHẬT MẮT ĐỘNG MỖI 50MS =====
     void UpdateDisplayAnimation() {
         if (!display_) return;
 
         auto& app = Application::GetInstance();
         
-        // Logic chớp mắt (mỗi 4 giây chớp 1 lần, kéo dài 150ms)
+        // Đảm bảo mắt đã được vẽ
+        InitEyes();
+
+        // Logic chớp mắt (mỗi 4 giây chớp 1 lần, nhắm 150ms)
         static uint32_t last_blink_time = 0;
         uint32_t now_ms = esp_timer_get_time() / 1000;
         if (!is_blinking_ && (now_ms - last_blink_time > 4000)) {
@@ -105,27 +146,37 @@ private:
             is_blinking_ = false;
         }
 
-        // Chọn hình dạng mắt (dùng ký tự đơn giản cho OLED)
-        std::string eyes;
-        if (is_blinking_) {
-            eyes = "- -"; // Mắt nhắm
-        } else if (current_emotion_ == "happy") {
-            eyes = "^ ^"; // Mắt cười
-        } else if (current_emotion_ == "sad") {
-            eyes = "v v"; // Mắt buồn
+        // Kích thước và độ cong mắt mặc định
+        int eye_w = 22;
+        int eye_h = 24;
+        int radius = 11;
+
+        // Thay đổi theo trạng thái
+        if (is_blinking_ || current_emotion_ == "sad") {
+            // Nhắm mắt hoặc buồn: Mắt dẹt thành đường kẻ
+            eye_w = 22;
+            eye_h = 2;
+            radius = 0;
+        } else if (current_emotion_ == "happy" || app.GetDeviceState() == kDeviceStateSpeaking) {
+            // Vui / Nói: Mắt híp (dẹt nhưng cong)
+            eye_w = 22;
+            eye_h = 10;
+            radius = 10;
         } else if (app.GetDeviceState() == kDeviceStateListening) {
-            eyes = "O O"; // Mắt to khi nghe
-        } else if (app.GetDeviceState() == kDeviceStateSpeaking) {
-            // Khi nói: mắt to rồi nhỏ lại liên tục
-            static int frame = 0;
-            frame++;
-            eyes = (frame % 4 == 0) ? "o o" : "O O";
-        } else {
-            eyes = "O O"; // Mắt mở bình thường
+            // Nghe: Mắt to tròn
+            eye_w = 28;
+            eye_h = 28;
+            radius = 14;
         }
 
-        // Cập nhật lên màn hình bằng API chuẩn
-        display_->SetEmotion(eyes.c_str());
+        // Lock màn hình để cập nhật LVGL
+        DisplayLockGuard lock(display_);
+        lv_obj_set_size(eye_left_, eye_w, eye_h);
+        lv_obj_set_size(eye_right_, eye_w, eye_h);
+        lv_obj_set_style_radius(eye_left_, radius, 0);
+        lv_obj_set_style_radius(eye_right_, radius, 0);
+
+        // Cập nhật dòng trạng thái bên dưới (dùng hàm SetStatus gốc)
         display_->SetStatus(GetStatusText().c_str());
     }
 
@@ -140,10 +191,9 @@ private:
         }
     }
 
-    // Hàm giữ để tương thích với logic cũ, nhưng không còn lỗi
+    // Hàm giữ để tương thích với logic cũ
     void ShowEmotionDisplay(const std::string& emotion) {
         current_emotion_ = emotion;
-        // Animation sẽ được vẽ liên tục trong UpdateDisplayAnimation
     }
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -237,7 +287,6 @@ private:
         emotion_auto_mode_ = false;
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
-        
         ShowEmotionDisplay(emotion);
         
         if (emotion == "happy") {
@@ -290,12 +339,6 @@ private:
             anim_led1_ = {PATTERN_HEARTBEAT, 5, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(5);
-            for (int i = 0; i < 3; i++) {
-                SetLeftMotor(-20); SetRightMotor(20);
-                vTaskDelay(pdMS_TO_TICKS(400));
-                SetLeftMotor(20); SetRightMotor(-20);
-                vTaskDelay(pdMS_TO_TICKS(400));
-            }
             SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "neutral") {
@@ -304,29 +347,11 @@ private:
             emotion_auto_mode_ = true;
             SetLeftMotor(0); SetRightMotor(0);
         }
-        else if (emotion == "thinking") {
-            led_auto_mode_ = false;
-            anim_led1_ = {PATTERN_BREATH, 2, 255, 0, true};
-            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
-            SetLedTimeout(10);
-            SetLeftMotor(0); SetRightMotor(0);
-        }
-        else if (emotion == "listening") {
+        else if (emotion == "thinking" || emotion == "listening" || emotion == "speaking") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 3, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
-            SetLeftMotor(-15); SetRightMotor(15);
-            vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0); SetRightMotor(0);
-        }
-        else if (emotion == "speaking") {
-            led_auto_mode_ = false;
-            anim_led1_ = {PATTERN_BREATH, 4, 255, 0, true};
-            anim_led2_ = {PATTERN_BREATH, 4, 255, 0, true};
-            SetLeftMotor(15); SetRightMotor(15);
-            vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(-10); SetRightMotor(-10);
-            vTaskDelay(pdMS_TO_TICKS(300));
+            SetLedTimeout(10);
             SetLeftMotor(0); SetRightMotor(0);
         }
     }
@@ -393,7 +418,7 @@ private:
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (1) {
             board->UpdateLedCreative();
-            board->UpdateDisplayAnimation(); // <-- THÊM DÒNG NÀY
+            board->UpdateDisplayAnimation(); // <-- GỌI HÀM VẼ MẮT
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
@@ -665,7 +690,7 @@ public:
 
         anim_led1_.active = true;
         anim_led2_.active = true;
-        xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
+        xTaskCreate(LedCreativeTask, "led_creative", 4096, this, 5, nullptr);
 
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
         InitializeDisplayI2c();
