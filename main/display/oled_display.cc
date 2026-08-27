@@ -98,7 +98,7 @@ void OledDisplay::SetupUI() {
     }
 }
 
-// ==== KHỞI TẠO MẮT ====
+// ==== HÀM KHỞI TẠO MẮT (ĐÃ CHỈNH TỌA ĐỘ CHUẨN) ====
 void OledDisplay::InitEyes() {
     DisplayLockGuard lock(this);
     auto screen = lv_screen_active();
@@ -108,10 +108,10 @@ void OledDisplay::InitEyes() {
         lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
     }
 
-    // Tạo mắt trái
+    // Tạo mắt trái (Đặt y=24 để chừa chỗ cho phụ đề dưới đáy)
     eye_left_ = lv_obj_create(screen);
-    lv_obj_set_size(eye_left_, 22, 28);
-    lv_obj_set_pos(eye_left_, 20, 10);
+    lv_obj_set_size(eye_left_, 22, 26);
+    lv_obj_set_pos(eye_left_, 20, 24);
     lv_obj_set_style_border_width(eye_left_, 0, 0);
     lv_obj_set_style_bg_opa(eye_left_, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(eye_left_, lv_color_white(), 0);
@@ -119,8 +119,8 @@ void OledDisplay::InitEyes() {
 
     // Tạo mắt phải
     eye_right_ = lv_obj_create(screen);
-    lv_obj_set_size(eye_right_, 22, 28);
-    lv_obj_set_pos(eye_right_, 80, 10);
+    lv_obj_set_size(eye_right_, 22, 26);
+    lv_obj_set_pos(eye_right_, 80, 24);
     lv_obj_set_style_border_width(eye_right_, 0, 0);
     lv_obj_set_style_bg_opa(eye_right_, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(eye_right_, lv_color_white(), 0);
@@ -130,7 +130,7 @@ void OledDisplay::InitEyes() {
     eye_timer_ = lv_timer_create(EyeTimerCallback, 100, this);
 }
 
-// ==== ĐỔI HÌNH DẠNG MẮT ====
+// ==== HÀM CẬP NHẬT TRẠNG THÁI MẮT ====
 void OledDisplay::UpdateEyeState(int state) {
     eye_state_ = state;
     DisplayLockGuard lock(this);
@@ -148,13 +148,13 @@ void OledDisplay::UpdateEyeState(int state) {
         lv_obj_set_style_radius(eye_left_, 8, 0);
         lv_obj_set_style_radius(eye_right_, 8, 0);
     } else if (state == 3) { // To tròn (Nghe/Nói)
-        lv_obj_set_size(eye_left_, 28, 32);
-        lv_obj_set_size(eye_right_, 28, 32);
-        lv_obj_set_style_radius(eye_left_, 14, 0);
-        lv_obj_set_style_radius(eye_right_, 14, 0);
+        lv_obj_set_size(eye_left_, 26, 30);
+        lv_obj_set_size(eye_right_, 26, 30);
+        lv_obj_set_style_radius(eye_left_, 13, 0);
+        lv_obj_set_style_radius(eye_right_, 13, 0);
     } else { // Mở bình thường
-        lv_obj_set_size(eye_left_, 22, 28);
-        lv_obj_set_size(eye_right_, 22, 28);
+        lv_obj_set_size(eye_left_, 22, 26);
+        lv_obj_set_size(eye_right_, 22, 26);
         lv_obj_set_style_radius(eye_left_, 11, 0);
         lv_obj_set_style_radius(eye_right_, 11, 0);
     }
@@ -209,6 +209,12 @@ void OledDisplay::SetEmotion(const char* emotion) {
     } else {
         UpdateEyeState(0);
     }
+}
+
+// ==== HÀM SetStatus (Giữ nguyên phụ đề từ LvglDisplay) ====
+void OledDisplay::SetStatus(const char* status) {
+    // Gọi hàm SetStatus của lớp cha (LvglDisplay) để hiển thị phụ đề
+    LvglDisplay::SetStatus(status);
 }
 
 OledDisplay::~OledDisplay() {
@@ -323,7 +329,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
 
-    /* Status bar */
+    /* Status bar (Phụ đề) */
     status_bar_ = lv_obj_create(screen);
     lv_obj_set_size(status_bar_, LV_HOR_RES, 16);
     lv_obj_set_style_radius(status_bar_, 0, 0);
@@ -332,7 +338,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_pad_all(status_bar_, 0, 0);
     lv_obj_set_scrollbar_mode(status_bar_, LV_SCROLLBAR_MODE_OFF);
     lv_obj_set_style_layout(status_bar_, LV_LAYOUT_NONE, 0);
-    lv_obj_align(status_bar_, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_align(status_bar_, LV_ALIGN_BOTTOM_MID, 0, 0); // Đặt xuống ĐÁY màn hình
 
     notification_label_ = lv_label_create(status_bar_);
     lv_obj_set_width(notification_label_, LV_HOR_RES);
@@ -395,12 +401,12 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 
-    // ==== QUAN TRỌNG: KHỞI TẠO MẮT ====
+    // ==== KHỞI TẠO MẮT SAU KHI HOÀN THIỆN UI ====
     InitEyes();
 }
 
 void OledDisplay::SetupUI_128x32() {
-    // (Giữ nguyên code gốc, thêm InitEyes() ở cuối)
+    // (Giữ nguyên code cũ, thêm InitEyes() ở cuối)
     InitEyes();
 }
 
