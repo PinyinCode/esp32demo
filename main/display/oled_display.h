@@ -38,6 +38,7 @@ private:
     // ==== THÊM: HÀM MẮT ĐỘNG ====
     void InitEyes();
     void UpdateEyeState(int state);
+    void UpdateEyeColor();
     void UpdateEyesByState();
     static void EyeTimerCallback(lv_timer_t* timer);
 
