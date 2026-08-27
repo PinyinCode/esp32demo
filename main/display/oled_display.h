@@ -2,7 +2,6 @@
 #define OLED_DISPLAY_H
 
 #include "lvgl_display.h"
-
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <string>
@@ -22,7 +21,7 @@ private:
     lv_obj_t *emotion_label_ = nullptr;
     lv_obj_t* chat_message_label_ = nullptr;
 
-    // ==== THÊM: CÁC BIẾN CHO MẮT ĐỘNG ====
+    // ==== THÊM: BIẾN MẮT ĐỘNG ====
     lv_obj_t* eye_left_ = nullptr;
     lv_obj_t* eye_right_ = nullptr;
     lv_timer_t* eye_timer_ = nullptr;
@@ -36,9 +35,10 @@ private:
     void SetupUI_128x64();
     void SetupUI_128x32();
 
-    // ==== THÊM: HÀM KHỞI TẠO MẮT VÀ CẬP NHẬT ====
+    // ==== THÊM: HÀM MẮT ĐỘNG ====
     void InitEyes();
     void UpdateEyeState(int state);
+    void UpdateEyesByState();
     static void EyeTimerCallback(lv_timer_t* timer);
 
 public:
@@ -49,9 +49,6 @@ public:
     virtual void SetChatMessage(const char* role, const char* content) override;
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetTheme(Theme* theme) override;
-
-    // ==== THÊM: HÀM CÔNG KHAI ĐỂ BOARD GỌI ====
-    void SetCustomEmotion(const std::string& emotion);
 };
 
 #endif // OLED_DISPLAY_H
