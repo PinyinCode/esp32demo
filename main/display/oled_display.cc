@@ -14,6 +14,8 @@
 #include <noto_emoji.h>
 
 #define TAG "OledDisplay"
+
+// ==== MÀU MẮT THEO CẢM XÚC ====
 #define COLOR_WHITE lv_color_hex(0xFFFFFF)
 #define COLOR_GRAY   lv_color_hex(0xAAAAAA)
 #define COLOR_DIM    lv_color_hex(0x555555)
@@ -142,19 +144,19 @@ void OledDisplay::UpdateEyeColor() {
     lv_color_t eye_color = COLOR_WHITE;
 
     if (current_emotion_ == "happy") {
-        eye_color = COLOR_WHITE;       // Vui: Mắt sáng rõ
+        eye_color = COLOR_WHITE;
     } else if (current_emotion_ == "sad") {
-        eye_color = COLOR_DIM;         // Buồn: Mắt tối, mờ
+        eye_color = COLOR_DIM;
     } else if (current_emotion_ == "angry") {
-        eye_color = COLOR_BLACK;       // Giận: Mắt tối đen
+        eye_color = COLOR_BLACK;
     } else if (current_emotion_ == "scared") {
-        eye_color = COLOR_GRAY;        // Sợ: Mắt xám
+        eye_color = COLOR_GRAY;
     } else if (current_emotion_ == "love") {
-        eye_color = COLOR_WHITE;       // Yêu: Mắt sáng
+        eye_color = COLOR_WHITE;
     } else if (current_emotion_ == "thinking") {
-        eye_color = COLOR_GRAY;        // Suy nghĩ: Mắt xám
+        eye_color = COLOR_GRAY;
     } else {
-        eye_color = COLOR_WHITE;       // Trung lập: Mắt trắng sáng
+        eye_color = COLOR_WHITE;
     }
 
     lv_obj_set_style_bg_color(eye_left_, eye_color, 0);
