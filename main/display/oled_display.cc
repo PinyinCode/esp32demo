@@ -2,6 +2,7 @@
 #include "assets/lang_config.h"
 #include "lvgl_font.h"
 #include "lvgl_theme.h"
+#include "application.h"
 
 #include <algorithm>
 #include <string>
@@ -97,12 +98,12 @@ void OledDisplay::SetupUI() {
     }
 }
 
-// ==== HÀM KHỞI TẠO MẮT ĐỘNG (MỚI) ====
+// ==== KHỞI TẠO MẮT ====
 void OledDisplay::InitEyes() {
     DisplayLockGuard lock(this);
     auto screen = lv_screen_active();
 
-    // Ẩn icon Robot cũ (emotion_label_) để nhường chỗ cho mắt
+    // Ẩn icon cũ để nhường chỗ
     if (emotion_label_ != nullptr) {
         lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
     }
@@ -125,11 +126,11 @@ void OledDisplay::InitEyes() {
     lv_obj_set_style_bg_color(eye_right_, lv_color_white(), 0);
     lv_obj_set_style_radius(eye_right_, 11, 0);
 
-    // Tạo Timer để mắt chớp tự động mỗi 50ms
-    eye_timer_ = lv_timer_create(EyeTimerCallback, 50, this);
+    // Timer để mắt tự chớp và tự đổi theo trạng thái
+    eye_timer_ = lv_timer_create(EyeTimerCallback, 100, this);
 }
 
-// ==== HÀM CẬP NHẬT MẮT (MỚI) ====
+// ==== ĐỔI HÌNH DẠNG MẮT ====
 void OledDisplay::UpdateEyeState(int state) {
     eye_state_ = state;
     DisplayLockGuard lock(this);
@@ -159,7 +160,21 @@ void OledDisplay::UpdateEyeState(int state) {
     }
 }
 
-// ==== TIMER CHỚP MẮT TỰ ĐỘNG (MỚI) ====
+// ==== TỰ ĐỘNG ĐỔI THEO TRẠNG THÁI MÁY ====
+void OledDisplay::UpdateEyesByState() {
+    if (is_blinking_) return;
+
+    auto& app = Application::GetInstance();
+    switch (app.GetDeviceState()) {
+        case kDeviceStateIdle: UpdateEyeState(0); break;
+        case kDeviceStateConnecting: UpdateEyeState(3); break;
+        case kDeviceStateListening: UpdateEyeState(3); break;
+        case kDeviceStateSpeaking: UpdateEyeState(2); break;
+        default: UpdateEyeState(0); break;
+    }
+}
+
+// ==== TIMER TỰ ĐỘNG CHỚP MẮT ====
 void OledDisplay::EyeTimerCallback(lv_timer_t* timer) {
     auto* display = static_cast<OledDisplay*>(timer->user_data);
     if (!display || !display->eye_left_) return;
@@ -167,54 +182,37 @@ void OledDisplay::EyeTimerCallback(lv_timer_t* timer) {
     uint32_t now_ms = esp_timer_get_time() / 1000;
     static uint32_t last_blink_time = 0;
 
-    // Mỗi 4 giây chớp 1 lần, nhắm trong 150ms
-    if (!display->is_blinking_ && (now_ms - last_blink_time > 4000)) {
+    if (!display->is_blinking_ && (now_ms - last_blink_time > 5000)) {
         display->is_blinking_ = true;
         last_blink_time = now_ms;
         display->UpdateEyeState(1); // Nhắm
-    } else if (display->is_blinking_ && (now_ms - last_blink_time > 150)) {
+    } else if (display->is_blinking_ && (now_ms - last_blink_time > 200)) {
         display->is_blinking_ = false;
-        // Mở lại theo trạng thái hiện tại
-        if (display->eye_state_ == 1) {
-            display->UpdateEyeState(0);
-        }
+        display->UpdateEyesByState(); // Mở lại đúng trạng thái
+    } else if (!display->is_blinking_) {
+        display->UpdateEyesByState(); // Luôn cập nhật theo trạng thái
     }
 }
 
-// ==== HÀM SetEmotion (SỬA ĐỂ ĐIỀU KHIỂN MẮT) ====
+// ==== SetEmotion: Điều khiển mắt theo cảm xúc ====
 void OledDisplay::SetEmotion(const char* emotion) {
     DisplayLockGuard lock(this);
 
-    // Nếu chưa tạo mắt thì khởi tạo
-    if (eye_left_ == nullptr) {
-        InitEyes();
-    }
+    if (eye_left_ == nullptr) InitEyes();
 
-    // Đổi hình dạng mắt theo cảm xúc
     if (strcmp(emotion, "happy") == 0) {
-        current_emotion_ = "happy";
-        UpdateEyeState(2); // Híp vui
+        UpdateEyeState(2);
     } else if (strcmp(emotion, "sad") == 0) {
-        current_emotion_ = "sad";
-        UpdateEyeState(1); // Nhắm buồn
+        UpdateEyeState(1);
     } else if (strcmp(emotion, "listening") == 0 || strcmp(emotion, "speaking") == 0) {
-        current_emotion_ = "listening";
-        UpdateEyeState(3); // To tròn
+        UpdateEyeState(3);
     } else {
-        current_emotion_ = "neutral";
-        UpdateEyeState(0); // Mở bình thường
+        UpdateEyeState(0);
     }
-}
-
-// ==== HÀM CÔNG KHAI CHO BOARD GỌI (MỚI) ====
-void OledDisplay::SetCustomEmotion(const std::string& emotion) {
-    SetEmotion(emotion.c_str());
 }
 
 OledDisplay::~OledDisplay() {
-    if (content_ != nullptr) {
-        lv_obj_del(content_);
-    }
+    if (content_ != nullptr) lv_obj_del(content_);
 
     bool is_128x64_layout = (top_bar_ != nullptr);
     if (status_bar_ != nullptr && is_128x64_layout) {
@@ -238,20 +236,13 @@ OledDisplay::~OledDisplay() {
         }
         lv_obj_del(side_bar_);
     }
-    if (container_ != nullptr) {
-        lv_obj_del(container_);
-    }
+    if (container_ != nullptr) lv_obj_del(container_);
 
-    // Xóa mắt
     if (eye_left_) lv_obj_del(eye_left_);
     if (eye_right_) lv_obj_del(eye_right_);
 
-    if (panel_ != nullptr) {
-        esp_lcd_panel_del(panel_);
-    }
-    if (panel_io_ != nullptr) {
-        esp_lcd_panel_io_del(panel_io_);
-    }
+    if (panel_ != nullptr) esp_lcd_panel_del(panel_);
+    if (panel_io_ != nullptr) esp_lcd_panel_io_del(panel_io_);
     lvgl_port_deinit();
 }
 
@@ -261,9 +252,7 @@ void OledDisplay::Unlock() { lvgl_port_unlock(); }
 
 void OledDisplay::SetChatMessage(const char* role, const char* content) {
     DisplayLockGuard lock(this);
-    if (chat_message_label_ == nullptr) {
-        return;
-    }
+    if (chat_message_label_ == nullptr) return;
 
     std::string content_str = content;
     std::replace(content_str.begin(), content_str.end(), '\n', ' ');
@@ -301,7 +290,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_set_style_border_width(container_, 0, 0);
     lv_obj_set_style_pad_row(container_, 0, 0);
 
-    /* Layer 1: Top bar */
+    /* Top bar */
     top_bar_ = lv_obj_create(container_);
     lv_obj_set_size(top_bar_, LV_HOR_RES, 16);
     lv_obj_set_style_radius(top_bar_, 0, 0);
@@ -334,7 +323,7 @@ void OledDisplay::SetupUI_128x64() {
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
 
-    /* Layer 2: Status bar */
+    /* Status bar */
     status_bar_ = lv_obj_create(screen);
     lv_obj_set_size(status_bar_, LV_HOR_RES, 16);
     lv_obj_set_style_radius(status_bar_, 0, 0);
@@ -406,21 +395,19 @@ void OledDisplay::SetupUI_128x64() {
     lv_obj_center(low_battery_label_);
     lv_obj_add_flag(low_battery_popup_, LV_OBJ_FLAG_HIDDEN);
 
-    // ==== KHỞI TẠO MẮT ĐỘNG (GỌI SAU KHI TẠO UI) ====
+    // ==== QUAN TRỌNG: KHỞI TẠO MẮT ====
     InitEyes();
 }
 
 void OledDisplay::SetupUI_128x32() {
-    // ... (Giữ nguyên y hệt code cũ của SetupUI_128x32) ...
-    // Cuối hàm SetupUI_128x32 cũng gọi InitEyes();
+    // (Giữ nguyên code gốc, thêm InitEyes() ở cuối)
+    InitEyes();
 }
 
 void OledDisplay::SetTheme(Theme* theme) {
     DisplayLockGuard lock(this);
-
     auto lvgl_theme = static_cast<LvglTheme*>(theme);
     auto text_font = lvgl_theme->text_font()->font();
-
     auto screen = lv_screen_active();
     lv_obj_set_style_text_font(screen, text_font, 0);
 }
