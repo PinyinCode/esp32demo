@@ -108,8 +108,8 @@ private:
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
     // ===== HỒNG NGOẠI (IR) & QUẢN LÝ ĐA THIẾT BỊ NVS =====
-    std::map<std::string, IrSignalData> ir_database_; // Lưu nhiều mã theo tên
-    std::string current_learning_device_ = "";        // Tên thiết bị đang chờ học lệnh
+    std::map<std::string, IrSignalData> ir_database_; 
+    std::string current_learning_device_ = "";        
     bool ir_initialized_ = false;
     bool is_learning_mode = false;
     uint32_t temp_learning_intervals[150];
@@ -130,11 +130,10 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  QUẢN LÝ NVS CHO NHIỀU MÃ IR
+    //  QUẢN LÝ NVS CHO NHIỀU MÃ IR (DÙNG ITERATOR)
     // ==========================================
     void SaveIrToNvs(const std::string& name, const uint32_t* data, int len) {
         nvs_handle_t nvs_handle;
-        // Dùng chung namespace "ir_storage" nhưng phân tách bằng tên thiết bị làm key tiền tố
         esp_err_t err = nvs_open("ir_storage", NVS_READWRITE, &nvs_handle);
         if (err != ESP_OK) {
             ESP_LOGE(TAG, "Lỗi mở NVS để lưu IR cho thiết bị: %s", name.c_str());
@@ -163,23 +162,39 @@ private:
             return;
         }
 
-        // Danh sách các thiết bị bạn thường dùng (hoặc có thể mở rộng quét qua iterator nếu cần)
-        std::string common_devices[] = {"fan_kitchen", "ac_living", "tv_room", "light_bedroom", "fan_room"};
-        for (const auto& dev_name : common_devices) {
-            int32_t len = 0;
-            std::string len_key = dev_name + "_len";
-            std::string data_key = dev_name + "_dat";
+        nvs_iterator_t it = NULL;
+        err = nvs_entry_find(NVS_DEFAULT_PART_NAME, "ir_storage", NVS_TYPE_I32, &it);
+        
+        while (err == ESP_OK && it != NULL) {
+            nvs_entry_info_t info;
+            nvs_entry_info(it, &info);
+            
+            std::string full_key(info.key);
+            if (full_key.length() > 4 && full_key.substr(full_key.length() - 4) == "_len") {
+                std::string dev_name = full_key.substr(0, full_key.length() - 4);
+                
+                int32_t len = 0;
+                std::string data_key = dev_name + "_dat";
 
-            if (nvs_get_i32(nvs_handle, len_key.c_str(), &len) == ESP_OK && len > 0 && len <= 150) {
-                IrSignalData sig;
-                sig.len = len;
-                size_t required_size = sizeof(uint32_t) * len;
-                if (nvs_get_blob(nvs_handle, data_key.c_str(), sig.intervals, &required_size) == ESP_OK) {
-                    ir_database_[dev_name] = sig;
-                    ESP_LOGI(TAG, "Đã tải mã IR cho [%s] từ NVS (Số xung: %d)", dev_name.c_str(), len);
+                if (nvs_get_i32(nvs_handle, full_key.c_str(), &len) == ESP_OK && len > 0 && len <= 150) {
+                    IrSignalData sig;
+                    sig.len = len;
+                    size_t required_size = sizeof(uint32_t) * len;
+                    
+                    if (nvs_get_blob(nvs_handle, data_key.c_str(), sig.intervals, &required_size) == ESP_OK) {
+                        ir_database_[dev_name] = sig;
+                        ESP_LOGI(TAG, "Đã tải mã IR tự động cho [%s] từ NVS (Số xung: %d)", dev_name.c_str(), len);
+                    }
                 }
             }
+            
+            err = nvs_entry_next(&it);
         }
+        
+        if (it != NULL) {
+            nvs_release_iterator(it);
+        }
+        
         nvs_close(nvs_handle);
     }
 
@@ -250,13 +265,11 @@ private:
                 temp_learning_len = count;
                 is_learning_mode = false;
                 
-                // Lưu vào RAM database
                 IrSignalData new_sig;
                 new_sig.len = temp_learning_len;
                 memcpy(new_sig.intervals, temp_learning_intervals, sizeof(uint32_t) * temp_learning_len);
                 ir_database_[current_learning_device_] = new_sig;
 
-                // Lưu vĩnh viễn vào NVS
                 SaveIrToNvs(current_learning_device_, new_sig.intervals, new_sig.len);
                 
                 ESP_LOGI(TAG, ">>> ĐÃ HỌC VÀ LƯU XONG MÃ CHO [%s]! Số xung: %d", current_learning_device_.c_str(), temp_learning_len);
@@ -311,7 +324,7 @@ private:
     }
 
     // ==========================================
-    //  AHT20 FUNCTIONS (Sử dụng chân từ config.h)
+    //  AHT20 FUNCTIONS
     // ==========================================
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
@@ -694,13 +707,13 @@ private:
         };
         ledc_timer_config(&timer);
         
-        ledc_channel_config_t ch1 = {.gpio_num = DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch1 = {.gpio_num = (gpio_num_t)DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch1);
-        ledc_channel_config_t ch2 = {.gpio_num = DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch2 = {.gpio_num = (gpio_num_t)DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch2);
-        ledc_channel_config_t ch3 = {.gpio_num = DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch3 = {.gpio_num = (gpio_num_t)DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch3);
-        ledc_channel_config_t ch4 = {.gpio_num = DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch4 = {.gpio_num = (gpio_num_t)DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch4);
     }
     
@@ -745,7 +758,7 @@ private:
     }
 
     // ==========================================
-    //  CẢM BIẾN KHOẢNG CÁCH / TOF (Dùng từ config.h)
+    //  CẢM BIẾN KHOẢNG CÁCH / TOF
     // ==========================================
     void InitializeUltrasonic() {
         ESP_LOGI(TAG, "Initializing ToF sensor using SDA: %d, SCL: %d...", (int)ULTRASONIC_SDA_PIN, (int)ULTRASONIC_SCL_PIN);
@@ -791,8 +804,8 @@ private:
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
-        gpio_set_level(LED_1, 0);
-        gpio_set_level(LED_2, 0);
+        gpio_set_level((gpio_num_t)LED_1, 0);
+        gpio_set_level((gpio_num_t)LED_2, 0);
     }
 
     void InitializeAdc() {
@@ -846,13 +859,13 @@ private:
         mcp.AddTool("self.led.on", "Bật LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
-                gpio_set_level(LED_1, 1); gpio_set_level(LED_2, 1);
+                gpio_set_level((gpio_num_t)LED_1, 1); gpio_set_level((gpio_num_t)LED_2, 1);
                 return "LED bật";
             });
         mcp.AddTool("self.led.off", "Tắt LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
-                gpio_set_level(LED_1, 0); gpio_set_level(LED_2, 0);
+                gpio_set_level((gpio_num_t)LED_1, 0); gpio_set_level((gpio_num_t)LED_2, 0);
                 return "LED tắt";
             });
     }
@@ -931,14 +944,14 @@ private:
 
 public:
     WkEsp32s3Dev() :
-        boot_button_(BOOT_BUTTON_GPIO),
+        boot_button_((gpio_num_t)BOOT_BUTTON_GPIO),
 #if CONFIG_TOUCH_SENSOR_ENABLED
         touch_button_((gpio_num_t)CONFIG_TOUCH_SENSOR_GPIO),
 #else
-        touch_button_(TOUCH_BUTTON_GPIO),
+        touch_button_((gpio_num_t)TOUCH_BUTTON_GPIO),
 #endif
-        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
+        volume_up_button_((gpio_num_t)VOLUME_UP_BUTTON_GPIO),
+        volume_down_button_((gpio_num_t)VOLUME_DOWN_BUTTON_GPIO) {
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
@@ -1000,7 +1013,7 @@ public:
     void InitializeTools() {}
 
     virtual Led* GetLed() override {
-        static SingleLed led(LED_1);
+        static SingleLed led((gpio_num_t)LED_1);
         return &led;
     }
 
