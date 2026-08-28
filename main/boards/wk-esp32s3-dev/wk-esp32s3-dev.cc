@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
+#include <sstream>
+#include <vector>
 #include <map>
 
 #define TAG "WkEsp32s3Dev"
@@ -130,6 +132,63 @@ private:
     friend class SensorController;
 
     // ==========================================
+    //  HÀM CHUẨN HÓA TÊN THIẾT BỊ AN TOÀN CHO NVS
+    // ==========================================
+    std::string SanitizeDeviceName(std::string name) {
+        std::string lower = "";
+        for (char c : name) {
+            if (c >= 'A' && c <= 'Z') {
+                lower += (c + 32);
+            } else {
+                lower += c;
+            }
+        }
+
+        std::stringstream ss(lower);
+        std::string word;
+        std::vector<std::string> words;
+
+        while (ss >> word) {
+            std::string clean = "";
+            for (char c : word) {
+                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
+                    clean += c;
+                }
+            }
+            if (!clean.empty()) {
+                if (clean == "phong") clean = "p";
+                else if (clean == "khach") clean = "kh";
+                else if (clean == "bep") clean = "bep";
+                else if (clean == "ngu") clean = "ngu";
+                else if (clean == "an") clean = "an";
+                else if (clean == "dieu" || clean == "hoa" || clean == "dieuhoa") clean = "dh";
+                else if (clean == "may" || clean == "lanh" || clean == "maylanh") clean = "ml";
+                else if (clean == "quat") clean = "quat";
+                else if (clean == "tran") clean = "tran";
+                else if (clean == "cay") clean = "cay";
+                else if (clean == "tivi" || clean == "tv") clean = "tv";
+
+                words.push_back(clean);
+            }
+        }
+
+        std::string result = "";
+        for (size_t i = 0; i < words.size(); ++i) {
+            std::string temp = result.empty() ? words[i] : result + "_" + words[i];
+            if (temp.length() > 15) {
+                break; 
+            }
+            result = temp;
+        }
+
+        if (result.empty()) {
+            result = "dev_ir";
+        }
+
+        return result;
+    }
+
+    // ==========================================
     //  QUẢN LÝ NVS CHO NHIỀU MÃ IR (DÙNG ITERATOR)
     // ==========================================
     void SaveIrToNvs(const std::string& name, const uint32_t* data, int len) {
@@ -223,15 +282,16 @@ private:
         ESP_LOGI(TAG, "Multi-Device IR Initialized. TX: %d, RX: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
-    void StartLearningIr(const std::string& device_name) {
-        current_learning_device_ = device_name;
+    void StartLearningIr(const std::string& raw_name) {
+        current_learning_device_ = SanitizeDeviceName(raw_name);
         is_learning_mode = true;
         temp_learning_len = 0;
-        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO [%s] --- Hãy bấm remote!", device_name.c_str());
+        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO [%s] (Gốc: %s) --- Hãy bấm remote!", current_learning_device_.c_str(), raw_name.c_str());
     }
 
-    void SendCustomIrSignal(const std::string& device_name) {
+    void SendCustomIrSignal(const std::string& raw_name) {
         if (!ir_initialized_) return;
+        std::string device_name = SanitizeDeviceName(raw_name);
         if (ir_database_.find(device_name) == ir_database_.end()) {
             ESP_LOGW(TAG, "Không tìm thấy mã IR của thiết bị: %s", device_name.c_str());
             return;
@@ -293,12 +353,13 @@ private:
 
         mcp.AddTool("self.ir.start_learning", "Bật chế độ học lệnh hồng ngoại theo tên thiết bị", 
             PropertyList({
-                Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị (VD: fan_kitchen, ac_living)")
+                Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị (VD: quạt phòng khách)")
             }),
             [this](const PropertyList& p) -> ReturnValue {
                 std::string dev_name = p["name"].value<std::string>();
                 StartLearningIr(dev_name);
-                return "Đã bật chế độ học lệnh cho [" + dev_name + "]. Hãy bấm remote trong vòng 5 giây tới!";
+                std::string safe_key = SanitizeDeviceName(dev_name);
+                return "Đã bật chế độ học lệnh cho [" + dev_name + "] (Khóa NVS: " + safe_key + "). Hãy bấm remote trong vòng 5 giây tới!";
             });
 
         mcp.AddTool("self.ir.replay", "Phát lại mã hồng ngoại của một thiết bị đã lưu", 
@@ -327,7 +388,8 @@ private:
                 Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị cần xóa")
             }),
             [this](const PropertyList& p) -> ReturnValue {
-                std::string dev_name = p["name"].value<std::string>();
+                std::string raw_name = p["name"].value<std::string>();
+                std::string dev_name = SanitizeDeviceName(raw_name);
                 
                 if (ir_database_.find(dev_name) != ir_database_.end()) {
                     ir_database_.erase(dev_name);
