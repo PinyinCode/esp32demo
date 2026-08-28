@@ -183,7 +183,7 @@ private:
     void SyncLicenseFromGitHub() {
         std::string my_mac = GetMacAddressString();
         // Thay đường dẫn raw bên dưới bằng link file licenses.json thực tế trên GitHub của bạn
-        std::string url = "https://raw.githubusercontent.com/username/repo/main/licenses.json";
+        std::string url = "https://raw.githubusercontent.com/PinyinCode/xiaozhi-esp32/refs/heads/main/main/boards/wk-esp32s3-dev/license_config.h";
 
         HttpFetchContext ctx;
         esp_http_client_config_t config = {};
