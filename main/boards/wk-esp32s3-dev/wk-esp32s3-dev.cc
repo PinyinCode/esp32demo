@@ -29,9 +29,6 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
-#include <sstream>
-#include <vector>
-#include <map>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -54,12 +51,6 @@ typedef struct {
     float humidity;
     uint32_t last_read_ms;
 } aht20_handle_t;
-
-// Cấu trúc lưu thông tin một mã IR trong bộ nhớ RAM tạm
-struct IrSignalData {
-    uint32_t intervals[150];
-    int len = 0;
-};
 
 // ===== SENSOR CONTROLLER =====
 class SensorController {
@@ -109,13 +100,13 @@ private:
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
-    // ===== HỒNG NGOẠI (IR) & QUẢN LÝ ĐA THIẾT BỊ NVS =====
-    std::map<std::string, IrSignalData> ir_database_; 
-    std::string current_learning_device_ = "";        
+    // ===== HỒNG NGOẠI (IR) & NVS STORAGE VARIABLES =====
+    std::string last_captured_ir_code_ = "Chưa có";
     bool ir_initialized_ = false;
+    uint32_t ir_raw_intervals[150];
+    int ir_raw_len = 0;
     bool is_learning_mode = false;
-    uint32_t temp_learning_intervals[150];
-    int temp_learning_len = 0;
+    std::string active_learning_device_ = "";
 
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
@@ -132,133 +123,69 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HÀM CHUẨN HÓA TÊN THIẾT BỊ AN TOÀN CHO NVS
+    //  HỒNG NGOẠI (IR) & HỌC LỆNH (NVS STORAGE)
     // ==========================================
-    std::string SanitizeDeviceName(std::string name) {
-        std::string lower = "";
-        for (char c : name) {
-            if (c >= 'A' && c <= 'Z') {
-                lower += (c + 32);
-            } else {
-                lower += c;
-            }
+    std::string sanitizeKey(const std::string& input) {
+        std::string result = input;
+        std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+        for (char &c : result) {
+            if (c == ' ' || c == '-') c = '_';
         }
-
-        std::stringstream ss(lower);
-        std::string word;
-        std::vector<std::string> words;
-
-        while (ss >> word) {
-            std::string clean = "";
-            for (char c : word) {
-                if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
-                    clean += c;
-                }
-            }
-            if (!clean.empty()) {
-                if (clean == "phong") clean = "p";
-                else if (clean == "khach") clean = "kh";
-                else if (clean == "bep") clean = "bep";
-                else if (clean == "ngu") clean = "ngu";
-                else if (clean == "an") clean = "an";
-                else if (clean == "dieu" || clean == "hoa" || clean == "dieuhoa") clean = "dh";
-                else if (clean == "may" || clean == "lanh" || clean == "maylanh") clean = "ml";
-                else if (clean == "quat") clean = "quat";
-                else if (clean == "tran") clean = "tran";
-                else if (clean == "cay") clean = "cay";
-                else if (clean == "tivi" || clean == "tv") clean = "tv";
-
-                words.push_back(clean);
-            }
+        if (result.length() > 15) {
+            result = result.substr(0, 15);
         }
-
-        std::string result = "";
-        for (size_t i = 0; i < words.size(); ++i) {
-            std::string temp = result.empty() ? words[i] : result + "_" + words[i];
-            if (temp.length() > 15) {
-                break; 
-            }
-            result = temp;
-        }
-
-        if (result.empty()) {
-            result = "dev_ir";
-        }
-
         return result;
     }
 
-    // ==========================================
-    //  QUẢN LÝ NVS CHO NHIỀU MÃ IR (DÙNG ITERATOR)
-    // ==========================================
-    void SaveIrToNvs(const std::string& name, const uint32_t* data, int len) {
+    bool saveIRCodeToNVS(const std::string& deviceName, const uint8_t* data, size_t length) {
+        std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
-        esp_err_t err = nvs_open("ir_storage", NVS_READWRITE, &nvs_handle);
+        esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Lỗi mở NVS để lưu IR cho thiết bị: %s", name.c_str());
-            return;
+            ESP_LOGE(TAG, "Lỗi mở NVS: %s", esp_err_to_name(err));
+            return false;
         }
 
-        std::string len_key = name + "_len";
-        std::string data_key = name + "_dat";
-
-        err = nvs_set_i32(nvs_handle, len_key.c_str(), len);
+        err = nvs_set_blob(nvs_handle, key.c_str(), data, length);
         if (err == ESP_OK) {
-            err = nvs_set_blob(nvs_handle, data_key.c_str(), data, sizeof(uint32_t) * len);
-            if (err == ESP_OK) {
-                nvs_commit(nvs_handle);
-                ESP_LOGI(TAG, ">>> ĐÃ LƯU/GHI ĐÈ THÀNH CÔNG mã IR cho thiết bị [%s] (Số xung: %d)", name.c_str(), len);
-            }
+            err = nvs_commit(nvs_handle);
+            ESP_LOGI(TAG, "Đã lưu thành công mã IR cho khóa: %s", key.c_str());
         }
         nvs_close(nvs_handle);
+        return err == ESP_OK;
     }
 
-    void LoadAllIrFromNvs() {
+    bool playIRCodeFromNVS(const std::string& deviceName) {
+        std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
-        esp_err_t err = nvs_open("ir_storage", NVS_READONLY, &nvs_handle);
+        esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Chưa có dữ liệu IR nào trong NVS.");
-            return;
+            ESP_LOGW(TAG, "Không thể mở NVS để đọc: %s", esp_err_to_name(err));
+            return false;
         }
 
-        nvs_iterator_t it = NULL;
-        err = nvs_entry_find(NVS_DEFAULT_PART_NAME, "ir_storage", NVS_TYPE_I32, &it);
-        
-        while (err == ESP_OK && it != NULL) {
-            nvs_entry_info_t info;
-            nvs_entry_info(it, &info);
-            
-            std::string full_key(info.key);
-            if (full_key.length() > 4 && full_key.substr(full_key.length() - 4) == "_len") {
-                std::string dev_name = full_key.substr(0, full_key.length() - 4);
-                
-                int32_t len = 0;
-                std::string data_key = dev_name + "_dat";
+        size_t required_size = 0;
+        err = nvs_get_blob(nvs_handle, key.c_str(), NULL, &required_size);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Không tìm thấy mã IR đã lưu cho thiết bị: %s", key.c_str());
+            nvs_close(nvs_handle);
+            return false;
+        }
 
-                if (nvs_get_i32(nvs_handle, full_key.c_str(), &len) == ESP_OK && len > 0 && len <= 150) {
-                    IrSignalData sig;
-                    sig.len = len;
-                    size_t required_size = sizeof(uint32_t) * len;
-                    
-                    if (nvs_get_blob(nvs_handle, data_key.c_str(), sig.intervals, &required_size) == ESP_OK) {
-                        ir_database_[dev_name] = sig;
-                        ESP_LOGI(TAG, "Đã tải mã IR tự động cho [%s] từ NVS (Số xung: %d)", dev_name.c_str(), len);
-                    }
-                }
-            }
-            
-            err = nvs_entry_next(&it);
+        uint8_t* ir_data = new uint8_t[required_size];
+        err = nvs_get_blob(nvs_handle, key.c_str(), ir_data, &required_size);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Đang phát lệnh IR từ NVS cho: %s (Kích thước: %d)", key.c_str(), required_size);
+            SendCustomIrSignal(ir_data, required_size);
         }
-        
-        if (it != NULL) {
-            nvs_release_iterator(it);
-        }
-        
+
+        delete[] ir_data;
         nvs_close(nvs_handle);
+        return err == ESP_OK;
     }
 
     void InitializeInfrared() {
-        ESP_LOGI(TAG, "Initializing Multi-Device Infrared (IR) module...");
+        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
 
         gpio_config_t io_conf_tx = {};
         io_conf_tx.intr_type = GPIO_INTR_DISABLE;
@@ -277,64 +204,52 @@ private:
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
-        LoadAllIrFromNvs();
-
-        ESP_LOGI(TAG, "Multi-Device IR Initialized. TX: %d, RX: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
+        ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
-    void StartLearningIr(const std::string& raw_name) {
-        current_learning_device_ = SanitizeDeviceName(raw_name);
+    void StartLearningIr(const std::string& targetName) {
         is_learning_mode = true;
-        temp_learning_len = 0;
-        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO [%s] (Gốc: %s) --- Hãy bấm remote!", current_learning_device_.c_str(), raw_name.c_str());
+        active_learning_device_ = targetName;
+        ir_raw_len = 0;
+        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO: %s --- Hãy bấm remote!", targetName.c_str());
     }
 
-    void SendCustomIrSignal(const std::string& raw_name) {
+    void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
-        std::string device_name = SanitizeDeviceName(raw_name);
-        if (ir_database_.find(device_name) == ir_database_.end()) {
-            ESP_LOGW(TAG, "Không tìm thấy mã IR của thiết bị: %s", device_name.c_str());
-            return;
-        }
-        auto& sig = ir_database_[device_name];
-        ESP_LOGI(TAG, "Đang phát tín hiệu hồng ngoại cho thiết bị: [%s] (Tổng xung: %d)", device_name.c_str(), sig.len);
+        ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
     }
 
-    bool ReceiveCustomIrSignal() {
-        if (!ir_initialized_ || !is_learning_mode) return false;
+    bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
+        if (!ir_initialized_) return false;
 
-        int level = gpio_get_level(IR_RECEIVER_GPIO);
-        if (level == 0) {
-            uint32_t start_time = (uint32_t)esp_timer_get_time();
-            int count = 0;
-            uint32_t last_edge = start_time;
-            int last_level = 0;
-            
-            while (count < 150) {
-                int current_level = gpio_get_level(IR_RECEIVER_GPIO);
-                if (current_level != last_level) {
-                    uint32_t now = (uint32_t)esp_timer_get_time();
-                    temp_learning_intervals[count++] = now - last_edge;
-                    last_edge = now;
-                    last_level = current_level;
+        if (is_learning_mode) {
+            int level = gpio_get_level(IR_RECEIVER_GPIO);
+            if (level == 0) {
+                uint32_t start_time = (uint32_t)esp_timer_get_time();
+                int count = 0;
+                uint32_t last_edge = start_time;
+                int last_level = 0;
+                
+                while (count < 150) {
+                    int current_level = gpio_get_level(IR_RECEIVER_GPIO);
+                    if (current_level != last_level) {
+                        uint32_t now = (uint32_t)esp_timer_get_time();
+                        ir_raw_intervals[count++] = now - last_edge;
+                        last_edge = now;
+                        last_level = current_level;
+                    }
+                    if ((esp_timer_get_time() - last_edge) > 50000) break; 
                 }
-                if ((esp_timer_get_time() - last_edge) > 50000) break; 
-            }
-            
-            if (count > 10) {
-                temp_learning_len = count;
-                is_learning_mode = false;
                 
-                IrSignalData new_sig;
-                new_sig.len = temp_learning_len;
-                memcpy(new_sig.intervals, temp_learning_intervals, sizeof(uint32_t) * temp_learning_len);
-                ir_database_[current_learning_device_] = new_sig;
-
-                SaveIrToNvs(current_learning_device_, new_sig.intervals, new_sig.len);
-                
-                ESP_LOGI(TAG, ">>> ĐÃ HỌC VÀ LƯU/GHI ĐÈ XONG MÃ CHO [%s]! Số xung: %d", current_learning_device_.c_str(), temp_learning_len);
-                current_learning_device_ = "";
-                return true;
+                if (count > 10) {
+                    ir_raw_len = count;
+                    is_learning_mode = false;
+                    saveIRCodeToNVS(active_learning_device_, (uint8_t*)ir_raw_intervals, ir_raw_len * sizeof(uint32_t));
+                    last_captured_ir_code_ = active_learning_device_ + " (Xung: " + std::to_string(ir_raw_len) + ")";
+                    ESP_LOGI(TAG, ">>> HỌC VÀ LƯU XONG CHO: %s", active_learning_device_.c_str());
+                    active_learning_device_ = "";
+                    return true;
+                }
             }
         }
         return false;
@@ -342,8 +257,10 @@ private:
 
     static void IrTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        uint8_t rx_buf[64];
+        size_t rx_len = 0;
         while (1) {
-            board->ReceiveCustomIrSignal();
+            board->ReceiveCustomIrSignal(rx_buf, sizeof(rx_buf), &rx_len);
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
@@ -351,65 +268,30 @@ private:
     void InitializeInfraredMcp() {
         auto& mcp = McpServer::GetInstance();
 
-        mcp.AddTool("self.ir.start_learning", "Bật chế độ học lệnh hồng ngoại theo tên thiết bị", 
-            PropertyList({
-                Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị (VD: quạt phòng khách)")
-            }),
+        mcp.AddTool("self.ir.learn", "Học lệnh hồng ngoại cho một nút bất kỳ", 
+            PropertyList({Property("name", kPropertyTypeString, "quat_so_1")}),
             [this](const PropertyList& p) -> ReturnValue {
-                std::string dev_name = p["name"].value<std::string>();
-                StartLearningIr(dev_name);
-                std::string safe_key = SanitizeDeviceName(dev_name);
-                return "Đã bật chế độ học lệnh cho [" + dev_name + "] (Khóa NVS: " + safe_key + "). Hãy bấm remote trong vòng 5 giây tới!";
+                std::string name = p["name"].value<std::string>();
+                StartLearningIr(name);
+                return "Đang chờ học lệnh cho: " + name + ". Hãy bấm remote ngay!";
             });
 
-        mcp.AddTool("self.ir.replay", "Phát lại mã hồng ngoại của một thiết bị đã lưu", 
-            PropertyList({
-                Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị cần phát lệnh")
-            }),
+        mcp.AddTool("self.fan.control", "Điều khiển quạt nhiều số hoặc tắt", 
+            PropertyList({Property("action", kPropertyTypeString, "so_1")}), // so_1, so_2, so_3, tat
             [this](const PropertyList& p) -> ReturnValue {
-                std::string dev_name = p["name"].value<std::string>();
-                SendCustomIrSignal(dev_name);
-                return "Đã phát lệnh IR cho thiết bị: " + dev_name;
+                std::string action = p["action"].value<std::string>();
+                std::string key = "fan_" + action;
+                playIRCodeFromNVS(key);
+                return "Đã thực hiện lệnh quạt: " + action;
             });
 
-        mcp.AddTool("self.ir.list_devices", "Liệt kê các thiết bị IR đã lưu trong bộ nhớ", 
-            PropertyList(),
+        mcp.AddTool("self.tv.control", "Bật tắt hoặc chỉnh âm lượng TV", 
+            PropertyList({Property("command", kPropertyTypeString, "nguon")}), // nguon, tang_am, giam_am
             [this](const PropertyList& p) -> ReturnValue {
-                std::string list = "Danh sách thiết bị IR đã lưu: ";
-                if (ir_database_.empty()) return "Chưa có thiết bị nào được học/lưu.";
-                for (const auto& pair : ir_database_) {
-                    list += "[" + pair.first + " (" + std::to_string(pair.second.len) + " xung)] ";
-                }
-                return list;
-            });
-
-        mcp.AddTool("self.ir.delete", "Xóa một thiết bị IR đã lưu khỏi bộ nhớ", 
-            PropertyList({
-                Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị cần xóa")
-            }),
-            [this](const PropertyList& p) -> ReturnValue {
-                std::string raw_name = p["name"].value<std::string>();
-                std::string dev_name = SanitizeDeviceName(raw_name);
-                
-                if (ir_database_.find(dev_name) != ir_database_.end()) {
-                    ir_database_.erase(dev_name);
-                } else {
-                    return "Không tìm thấy thiết bị [" + dev_name + "] trong bộ nhớ.";
-                }
-
-                nvs_handle_t nvs_handle;
-                esp_err_t err = nvs_open("ir_storage", NVS_READWRITE, &nvs_handle);
-                if (err == ESP_OK) {
-                    std::string len_key = dev_name + "_len";
-                    std::string data_key = dev_name + "_dat";
-                    
-                    nvs_erase_key(nvs_handle, len_key.c_str());
-                    nvs_erase_key(nvs_handle, data_key.c_str());
-                    nvs_commit(nvs_handle);
-                    nvs_close(nvs_handle);
-                }
-
-                return "Đã xóa thành công thiết bị [" + dev_name + "] khỏi hệ thống.";
+                std::string cmd = p["command"].value<std::string>();
+                std::string key = "tv_" + cmd;
+                playIRCodeFromNVS(key);
+                return "Đã gửi lệnh TV: " + cmd;
             });
     }
 
@@ -447,13 +329,8 @@ private:
     }
 
     esp_err_t InitAHT20() {
-        ESP_LOGI(TAG, "Initializing AHT20 sensor using SDA: %d, SCL: %d...", (int)AHT20_SDA_PIN, (int)AHT20_SCL_PIN);
-
         aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
-        if (!aht20_) {
-            ESP_LOGE(TAG, "Failed to allocate AHT20 handle");
-            return ESP_ERR_NO_MEM;
-        }
+        if (!aht20_) return ESP_ERR_NO_MEM;
 
         i2c_config_t conf = {};
         conf.mode = I2C_MODE_MASTER;
@@ -462,42 +339,21 @@ private:
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
 
-        esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
-        if (ret != ESP_OK) {
-            free(aht20_);
-            aht20_ = nullptr;
-            return ret;
-        }
+        i2c_param_config(AHT20_I2C_PORT, &conf);
+        i2c_driver_install(AHT20_I2C_PORT, conf.mode, 0, 0, 0);
 
-        ret = i2c_driver_install(AHT20_I2C_PORT, conf.mode, 0, 0, 0);
-        if (ret != ESP_OK) {
-            free(aht20_);
-            aht20_ = nullptr;
-            return ret;
-        }
-
-        ret = aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
-        if (ret != ESP_OK) return ret;
+        aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
         vTaskDelay(pdMS_TO_TICKS(20));
 
         uint8_t status;
-        ret = aht20_read(&status, 1);
-        if (ret != ESP_OK) return ret;
-
+        aht20_read(&status, 1);
         if (status & 0x08) {
             aht20_->calibrated = true;
         } else {
             uint8_t cal_cmd[2] = {0x08, 0x00};
-            ret = aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
-            if (ret != ESP_OK) return ret;
+            aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
             vTaskDelay(pdMS_TO_TICKS(300));
-            
-            ret = aht20_read(&status, 1);
-            if (ret == ESP_OK && (status & 0x08)) {
-                aht20_->calibrated = true;
-            } else {
-                aht20_->calibrated = false;
-            }
+            aht20_->calibrated = true;
         }
 
         aht20_->initialized = true;
@@ -513,15 +369,12 @@ private:
         }
 
         uint8_t trigger_cmd[3] = {0x33, 0x00, 0x00};
-        esp_err_t ret = aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3);
-        if (ret != ESP_OK) return ret;
+        if (aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3) != ESP_OK) return ESP_ERR_INVALID_STATE;
 
         vTaskDelay(pdMS_TO_TICKS(80));
 
         uint8_t data[6];
-        ret = aht20_read(data, 6);
-        if (ret != ESP_OK) return ret;
-
+        if (aht20_read(data, 6) != ESP_OK) return ESP_ERR_INVALID_STATE;
         if (data[0] & 0x80) return ESP_ERR_INVALID_STATE;
 
         uint32_t raw_humi = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | ((data[3] & 0xF0) >> 4);
@@ -590,7 +443,7 @@ private:
     }
 
     // ==========================================
-    //  HIỂN THỊ MẮT ĐỘNG
+    //  HIỂN THỊ MẮT ĐỘNG & LED SÁNG TẠO
     // ==========================================
     void UpdateDisplayAnimation() {
         if (!display_) return;
@@ -635,7 +488,6 @@ private:
         current_emotion_ = emotion;
     }
 
-    // ===== LED EFFECT FUNCTIONS =====
     int BreathEffect(uint32_t time_ms, int speed) {
         float period = 2000.0f / speed;
         float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
@@ -786,7 +638,9 @@ private:
         }
     }
 
-    // ===== ĐỘNG CƠ DRV8833 =====
+    // ==========================================
+    //  ĐỘNG CƠ DRV8833 & TOF & PIN
+    // ==========================================
     void InitializeMotor() {
         ledc_timer_config_t timer = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -797,13 +651,13 @@ private:
         };
         ledc_timer_config(&timer);
         
-        ledc_channel_config_t ch1 = {.gpio_num = (gpio_num_t)DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch1 = {.gpio_num = DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch1);
-        ledc_channel_config_t ch2 = {.gpio_num = (gpio_num_t)DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch2 = {.gpio_num = DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch2);
-        ledc_channel_config_t ch3 = {.gpio_num = (gpio_num_t)DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch3 = {.gpio_num = DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch3);
-        ledc_channel_config_t ch4 = {.gpio_num = (gpio_num_t)DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch4 = {.gpio_num = DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch4);
     }
     
@@ -847,19 +701,13 @@ private:
         }
     }
 
-    // ==========================================
-    //  CẢM BIẾN KHOẢNG CÁCH / TOF
-    // ==========================================
     void InitializeUltrasonic() {
-        ESP_LOGI(TAG, "Initializing ToF sensor using SDA: %d, SCL: %d...", (int)ULTRASONIC_SDA_PIN, (int)ULTRASONIC_SCL_PIN);
-
         i2c_config_t conf = {};
         conf.mode = I2C_MODE_MASTER;
         conf.sda_io_num = ULTRASONIC_SDA_PIN;
         conf.scl_io_num = ULTRASONIC_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-
         i2c_param_config(TOF_I2C_PORT, &conf);
         i2c_driver_install(TOF_I2C_PORT, conf.mode, 0, 0, 0);
     }
@@ -867,7 +715,6 @@ private:
     float ReadUltrasonicDistanceCm() {
         uint8_t reg_addr = 0x1E; 
         uint8_t data[2] = {0};
-
         i2c_cmd_handle_t cmd = i2c_cmd_link_create();
         i2c_master_start(cmd);
         i2c_master_write_byte(cmd, (TOF_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
@@ -879,10 +726,8 @@ private:
         
         esp_err_t ret = i2c_master_cmd_begin(TOF_I2C_PORT, cmd, pdMS_TO_TICKS(100));
         i2c_cmd_link_delete(cmd);
-
         if (ret != ESP_OK) return -1.0f;
-        uint16_t raw_distance = (data[0] << 8) | data[1];
-        return (float)raw_distance / 10.0f;
+        return (float)((data[0] << 8) | data[1]) / 10.0f;
     }
 
     void InitializeLedGpio() {
@@ -894,25 +739,20 @@ private:
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
-        gpio_set_level((gpio_num_t)LED_1, 0);
-        gpio_set_level((gpio_num_t)LED_2, 0);
+        gpio_set_level(LED_1, 0);
+        gpio_set_level(LED_2, 0);
     }
 
     void InitializeAdc() {
-        adc_oneshot_unit_init_cfg_t init_config = {
-            .unit_id = POWER_ADC_UNIT,
-            .ulp_mode = ADC_ULP_MODE_DISABLE,
-        };
+        adc_oneshot_unit_init_cfg_t init_config = {.unit_id = POWER_ADC_UNIT, .ulp_mode = ADC_ULP_MODE_DISABLE};
         adc_oneshot_new_unit(&init_config, &adc_handle_);
-
-        adc_oneshot_chan_cfg_t config = {
-            .atten = ADC_ATTEN_DB_12,
-            .bitwidth = ADC_BITWIDTH_12,
-        };
+        adc_oneshot_chan_cfg_t config = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12};
         adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config);
     }
 
-    // ===== MCP TOOLS =====
+    // ==========================================
+    //  TẤT CẢ MCP TOOLS ĐẦY ĐỦ
+    // ==========================================
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.motor.forward", "Robot tiến", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
@@ -949,13 +789,13 @@ private:
         mcp.AddTool("self.led.on", "Bật LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
-                gpio_set_level((gpio_num_t)LED_1, 1); gpio_set_level((gpio_num_t)LED_2, 1);
+                gpio_set_level(LED_1, 1); gpio_set_level(LED_2, 1);
                 return "LED bật";
             });
         mcp.AddTool("self.led.off", "Tắt LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
-                gpio_set_level((gpio_num_t)LED_1, 0); gpio_set_level((gpio_num_t)LED_2, 0);
+                gpio_set_level(LED_1, 0); gpio_set_level(LED_2, 0);
                 return "LED tắt";
             });
     }
@@ -1034,14 +874,14 @@ private:
 
 public:
     WkEsp32s3Dev() :
-        boot_button_((gpio_num_t)BOOT_BUTTON_GPIO),
+        boot_button_(BOOT_BUTTON_GPIO),
 #if CONFIG_TOUCH_SENSOR_ENABLED
         touch_button_((gpio_num_t)CONFIG_TOUCH_SENSOR_GPIO),
 #else
-        touch_button_((gpio_num_t)TOUCH_BUTTON_GPIO),
+        touch_button_(TOUCH_BUTTON_GPIO),
 #endif
-        volume_up_button_((gpio_num_t)VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_((gpio_num_t)VOLUME_DOWN_BUTTON_GPIO) {
+        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
@@ -1103,7 +943,7 @@ public:
     void InitializeTools() {}
 
     virtual Led* GetLed() override {
-        static SingleLed led((gpio_num_t)LED_1);
+        static SingleLed led(LED_1);
         return &led;
     }
 
