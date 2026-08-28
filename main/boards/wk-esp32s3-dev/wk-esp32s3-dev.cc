@@ -80,6 +80,7 @@ struct LedAnimation {
 class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
+    Button touch_button_; // Cảm biến chạm
     Display* display_ = nullptr;
     
     // ===== DISPLAY VARIABLES =====
@@ -959,6 +960,11 @@ private:
 public:
     WkEsp32s3Dev() :
         boot_button_(BOOT_BUTTON_GPIO),
+#if CONFIG_TOUCH_SENSOR_ENABLED
+        touch_button_((gpio_num_t)CONFIG_TOUCH_SENSOR_GPIO),
+#else
+        touch_button_(TOUCH_BUTTON_GPIO),
+#endif
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
@@ -1013,6 +1019,18 @@ public:
             }
             app.ToggleChatState();
         });
+
+        // Xử lý sự kiện khi nhấn cảm biến chạm
+#if CONFIG_TOUCH_SENSOR_ENABLED
+        touch_button_.OnClick([this]() {
+            auto& app = Application::GetInstance();
+            if (app.GetDeviceState() == kDeviceStateStarting) {
+                EnterWifiConfigMode();
+                return;
+            }
+            app.ToggleChatState();
+        });
+#endif
     }
 
     void InitializeTools() {
