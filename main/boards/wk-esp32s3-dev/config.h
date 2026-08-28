@@ -67,7 +67,7 @@
 #if CONFIG_TOUCH_SENSOR_ENABLED
     #define TOUCH_BUTTON_GPIO   (gpio_num_t)CONFIG_TOUCH_SENSOR_GPIO
 #else
-    #define TOUCH_BUTTON_GPIO   GPIO_NUM_NC
+    #define TOUCH_BUTTON_GPIO   GPIO_NUM_9
 #endif
 
 // ===== KHÔNG DÙNG =====
