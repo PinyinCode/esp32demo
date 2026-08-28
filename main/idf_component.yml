@@ -7,9 +7,9 @@ dependencies:
   espressif/esp_lcd_st77916: ^2.0.2
   espressif/esp_lcd_axs15231b: ^2.1.0
 
-  # Thêm component hồng ngoại vào đây
+  # Thêm thư viện IRremoteESP8266 trỏ trực tiếp từ GitHub
   crankyoldgit/irremoteesp8266:
-    version: ^2.8.6
+    git: https://github.com/crankyoldgit/IRremoteESP8266.git
 
   espressif/esp_lcd_st7701:
     version: ^2.0.2
