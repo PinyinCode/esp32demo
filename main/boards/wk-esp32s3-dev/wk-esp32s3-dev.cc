@@ -38,6 +38,10 @@ class WkEsp32s3Dev;
 #define AHT20_CMD_SOFT_RESET   0xBA
 #define AHT20_I2C_PORT         I2C_NUM_1
 
+// ===== TOF I2C DEFINITIONS =====
+#define TOF_I2C_PORT           I2C_NUM_0
+#define TOF_I2C_ADDR           0x29
+
 typedef struct {
     bool initialized;
     bool calibrated;
@@ -158,7 +162,6 @@ private:
         conf.scl_io_num = AHT20_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-        
 
         esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
         if (ret != ESP_OK) {
@@ -704,25 +707,52 @@ private:
         }
     }
 
-    // ===== PIR =====
-    void InitializePirSensor() {
-        gpio_config_t io_conf = {
-            .pin_bit_mask = 1ULL << PIR_MOTION_SENSOR_PIN,
-            .mode = GPIO_MODE_INPUT,
-            .pull_up_en = GPIO_PULLUP_DISABLE,
-            .pull_down_en = GPIO_PULLDOWN_DISABLE,
-            .intr_type = GPIO_INTR_DISABLE,
-        };
-        gpio_config(&io_conf);
-    }
-
-    bool ReadMotionDetected() {
-        return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
-    }
-
-    // ===== ULTRASONIC =====
+    // ===== CẢM BIẾN KHOẢNG CÁCH (I2C - VL53L0X/TOF) =====
     void InitializeUltrasonic() {
-        ESP_LOGI(TAG, "Initialize Ultrasonic Sensor");
+        i2c_config_t conf = {};
+        conf.mode = I2C_MODE_MASTER;
+        conf.sda_io_num = ULTRASONIC_SDA_PIN; // GPIO 40
+        conf.scl_io_num = ULTRASONIC_SCL_PIN; // GPIO 39
+        conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+
+        esp_err_t ret = i2c_param_config(TOF_I2C_PORT, &conf);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure ToF I2C params");
+            return;
+        }
+
+        ret = i2c_driver_install(TOF_I2C_PORT, conf.mode, 0, 0, 0);
+        if (ret != ESP_OK && ret != ESP_ERR_INVALID_STATE) {
+            ESP_LOGE(TAG, "Failed to install ToF I2C driver");
+            return;
+        }
+        
+        ESP_LOGI(TAG, "Initialized ToF Distance Sensor on SDA:%d, SCL:%d", ULTRASONIC_SDA_PIN, ULTRASONIC_SCL_PIN);
+    }
+
+    float ReadUltrasonicDistanceCm() {
+        uint8_t reg_addr = 0x1E; 
+        uint8_t data[2] = {0};
+
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (TOF_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_write_byte(cmd, reg_addr, true);
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (TOF_I2C_ADDR << 1) | I2C_MASTER_READ, true);
+        i2c_master_read(cmd, data, 2, I2C_MASTER_LAST_NACK);
+        i2c_master_stop(cmd);
+        
+        esp_err_t ret = i2c_master_cmd_begin(TOF_I2C_PORT, cmd, pdMS_TO_TICKS(100));
+        i2c_cmd_link_delete(cmd);
+
+        if (ret != ESP_OK) {
+            return -1.0f;
+        }
+
+        uint16_t raw_distance = (data[0] << 8) | data[1];
+        return (float)raw_distance / 10.0f;
     }
 
     // ===== LED GPIO =====
@@ -867,15 +897,21 @@ private:
             });
     }
 
-    // ===== MCP: SENSOR =====
+    // ===== MCP: SENSOR (DISTANCE) =====
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
         
         auto& mcp = McpServer::GetInstance();
-        mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
+        mcp.AddTool("self.sensor.distance", "Lấy khoảng cách vật cản phía trước",
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                return ReadMotionDetected() ? "Có chuyển động" : "Không có chuyển động";
+                float dist = ReadUltrasonicDistanceCm();
+                if (dist < 0) {
+                    return std::string("Không thể đọc cảm biến khoảng cách");
+                }
+                char buffer[32];
+                snprintf(buffer, sizeof(buffer), "Khoảng cách là %.1f cm", dist);
+                return std::string(buffer);
             });
     }
 
@@ -888,7 +924,6 @@ private:
         conf.scl_io_num = DISPLAY_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-        
         
         ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
         ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0));
@@ -932,7 +967,6 @@ public:
         InitializeMotorMcp();
 #endif
 
-        InitializePirSensor();
         InitializeUltrasonic();
         InitializeLedGpio();
         InitializeLedMcp();
