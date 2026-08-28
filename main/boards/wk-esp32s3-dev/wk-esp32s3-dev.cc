@@ -109,7 +109,7 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  AHT20 FUNCTIONS (ESP-IDF v4.4)
+    //  AHT20 FUNCTIONS
     // ==========================================
     
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
@@ -142,7 +142,7 @@ private:
         return ret;
     }
 
-        esp_err_t InitAHT20() {
+    esp_err_t InitAHT20() {
 #ifdef CONFIG_AHT20_ENABLED
         ESP_LOGI(TAG, "Initializing AHT20 sensor...");
 
@@ -158,7 +158,7 @@ private:
         conf.scl_io_num = AHT20_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-        conf.master.clk_speed = 100000;
+        conf.clk_speed = 100000;
 
         esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
         if (ret != ESP_OK) {
@@ -225,7 +225,6 @@ private:
         return ESP_ERR_NOT_SUPPORTED;
 #endif
     }
-
 
     esp_err_t ReadAHT20(float* temperature, float* humidity) {
         if (!aht20_ || !aht20_->calibrated || !aht20_->initialized) {
@@ -883,20 +882,17 @@ private:
     // ===== DISPLAY =====
     void InitDisplay() {
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-        // OLED I2C configuration for ESP-IDF v4.4
-        i2c_config_t conf = {
-            .mode = I2C_MODE_MASTER,
-            .sda_io_num = DISPLAY_SDA_PIN,
-            .scl_io_num = DISPLAY_SCL_PIN,
-            .sda_pullup_en = GPIO_PULLUP_ENABLE,
-            .scl_pullup_en = GPIO_PULLUP_ENABLE,
-            .master.clk_speed = 400000,
-        };
+        i2c_config_t conf = {};
+        conf.mode = I2C_MODE_MASTER;
+        conf.sda_io_num = DISPLAY_SDA_PIN;
+        conf.scl_io_num = DISPLAY_SCL_PIN;
+        conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.clk_speed = 400000;
         
         ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
         ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0));
         
-        // LCD panel I2C config
         esp_lcd_panel_io_i2c_config_t io_config = {};
         io_config.dev_addr = 0x3C;
         io_config.scl_speed_hz = 400 * 1000;
@@ -1014,7 +1010,6 @@ public:
 
 // ===== SENSOR CONTROLLER =====
 SensorController::SensorController(WkEsp32s3Dev* board) {
-    // Các MCP tool đã được thêm trong InitializeSensorMcp()
 }
 
 DECLARE_BOARD(WkEsp32s3Dev);
