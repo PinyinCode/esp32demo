@@ -12,7 +12,7 @@
 #include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_timer.h>
-#include <driver/i2c_master.h>
+#include <driver/i2c.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -26,10 +26,25 @@
 #include <math.h>
 #include <algorithm>
 #include <string>
+#include <cstring>
 
 #define TAG "WkEsp32s3Dev"
 
 class WkEsp32s3Dev;
+
+// ===== AHT20 DEFINITIONS =====
+#define AHT20_CMD_CALIBRATE    0xBE
+#define AHT20_CMD_TRIGGER      0xAC
+#define AHT20_CMD_SOFT_RESET   0xBA
+#define AHT20_I2C_PORT         I2C_NUM_1
+
+typedef struct {
+    bool initialized;
+    bool calibrated;
+    float temperature;
+    float humidity;
+    uint32_t last_read_ms;
+} aht20_handle_t;
 
 // ===== SENSOR CONTROLLER =====
 class SensorController {
@@ -62,9 +77,11 @@ class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
     Display* display_ = nullptr;
-    i2c_master_bus_handle_t display_i2c_bus_;
+    
+    // ===== DISPLAY VARIABLES =====
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
+    
     Button volume_up_button_;
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
@@ -72,76 +89,285 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // LED animation variables
+    // ===== AHT20 VARIABLES =====
+    aht20_handle_t* aht20_ = nullptr;
+    const int SENSOR_READ_INTERVAL_MS = 2000;
+
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
     bool led_auto_mode_ = true;
     
-    // LED timeout
     uint32_t led_timeout_ms_ = 0;
     uint32_t led_timeout_start_ = 0;
     const int DEFAULT_LED_DURATION_ = 30;
 
-    // Emotion state
     std::string current_emotion_ = "neutral";
     bool emotion_auto_mode_ = true;
+    bool is_blinking_ = false;
 
     friend class SensorController;
 
-    // ===== HIỂN THỊ EMOJI + TEXT =====
-    void ShowEmotionDisplay(const std::string& emotion) {
-        if (!display_) return;
+    // ==========================================
+    //  AHT20 FUNCTIONS
+    // ==========================================
+    
+    esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
+        i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
+        i2c_master_start(cmd_handle);
+        i2c_master_write_byte(cmd_handle, (AHT20_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_write_byte(cmd_handle, cmd, true);
+        if (data && len > 0) {
+            i2c_master_write(cmd_handle, data, len, true);
+        }
+        i2c_master_stop(cmd_handle);
+        esp_err_t ret = i2c_master_cmd_begin(AHT20_I2C_PORT, cmd_handle, pdMS_TO_TICKS(100));
+        i2c_cmd_link_delete(cmd_handle);
+        return ret;
+    }
+
+    esp_err_t aht20_read(uint8_t* data, size_t len) {
+        i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
+        i2c_master_start(cmd_handle);
+        i2c_master_write_byte(cmd_handle, (AHT20_I2C_ADDR << 1) | I2C_MASTER_READ, true);
+        if (len > 1) {
+            for (int i = 0; i < len - 1; i++) {
+                i2c_master_read_byte(cmd_handle, data + i, I2C_MASTER_ACK);
+            }
+        }
+        i2c_master_read_byte(cmd_handle, data + len - 1, I2C_MASTER_LAST_NACK);
+        i2c_master_stop(cmd_handle);
+        esp_err_t ret = i2c_master_cmd_begin(AHT20_I2C_PORT, cmd_handle, pdMS_TO_TICKS(100));
+        i2c_cmd_link_delete(cmd_handle);
+        return ret;
+    }
+
+    esp_err_t InitAHT20() {
+#ifdef CONFIG_AHT20_ENABLED
+        ESP_LOGI(TAG, "Initializing AHT20 sensor...");
+
+        aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
+        if (!aht20_) {
+            ESP_LOGE(TAG, "Failed to allocate AHT20 handle");
+            return ESP_ERR_NO_MEM;
+        }
+
+        i2c_config_t conf = {};
+        conf.mode = I2C_MODE_MASTER;
+        conf.sda_io_num = AHT20_SDA_PIN;
+        conf.scl_io_num = AHT20_SCL_PIN;
+        conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
         
-        if (emotion == "happy") {
-            display_->SetEmotion("😊");
-            display_->SetStatus("Vui vẻ!");
+
+        esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to configure I2C");
+            free(aht20_);
+            aht20_ = nullptr;
+            return ret;
         }
-        else if (emotion == "sad") {
-            display_->SetEmotion("😢");
-            display_->SetStatus("Buồn...");
+
+        ret = i2c_driver_install(AHT20_I2C_PORT, conf.mode, 0, 0, 0);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to install I2C driver");
+            free(aht20_);
+            aht20_ = nullptr;
+            return ret;
         }
-        else if (emotion == "angry") {
-            display_->SetEmotion("😠");
-            display_->SetStatus("Giận dữ!");
+
+        ret = aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to reset AHT20");
+            return ret;
         }
-        else if (emotion == "surprised") {
-            display_->SetEmotion("😮");
-            display_->SetStatus("Ngạc nhiên!");
+        vTaskDelay(pdMS_TO_TICKS(20));
+
+        uint8_t status;
+        ret = aht20_read(&status, 1);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to read AHT20 status");
+            return ret;
         }
-        else if (emotion == "scared") {
-            display_->SetEmotion("😨");
-            display_->SetStatus("Sợ hãi!");
+
+        if (status & 0x08) {
+            aht20_->calibrated = true;
+            ESP_LOGI(TAG, "AHT20 already calibrated");
+        } else {
+            uint8_t cal_cmd[2] = {0x08, 0x00};
+            ret = aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to calibrate AHT20");
+                return ret;
+            }
+            vTaskDelay(pdMS_TO_TICKS(300));
+            
+            ret = aht20_read(&status, 1);
+            if (ret == ESP_OK && (status & 0x08)) {
+                aht20_->calibrated = true;
+                ESP_LOGI(TAG, "AHT20 calibrated successfully");
+            } else {
+                ESP_LOGW(TAG, "AHT20 calibration failed");
+                aht20_->calibrated = false;
+            }
         }
-        else if (emotion == "sleeping") {
-            display_->SetEmotion("😴");
-            display_->SetStatus("Đang ngủ...");
+
+        aht20_->initialized = true;
+
+        float temp, hum;
+        ReadAHT20(&temp, &hum);
+        aht20_->last_read_ms = esp_timer_get_time() / 1000;
+        
+        ESP_LOGI(TAG, "AHT20 initialized successfully");
+        return ESP_OK;
+#else
+        ESP_LOGW(TAG, "AHT20 disabled in config");
+        return ESP_ERR_NOT_SUPPORTED;
+#endif
+    }
+
+    esp_err_t ReadAHT20(float* temperature, float* humidity) {
+        if (!aht20_ || !aht20_->calibrated || !aht20_->initialized) {
+            return ESP_ERR_INVALID_STATE;
         }
-        else if (emotion == "thinking") {
-            display_->SetEmotion("🤔");
-            display_->SetStatus("Đang suy nghĩ...");
+
+        uint8_t trigger_cmd[3] = {0x33, 0x00, 0x00};
+        esp_err_t ret = aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3);
+        if (ret != ESP_OK) return ret;
+
+        vTaskDelay(pdMS_TO_TICKS(80));
+
+        uint8_t data[6];
+        ret = aht20_read(data, 6);
+        if (ret != ESP_OK) return ret;
+
+        if (data[0] & 0x80) {
+            return ESP_ERR_INVALID_STATE;
         }
-        else if (emotion == "listening") {
-            display_->SetEmotion("👂");
-            display_->SetStatus("Đang lắng nghe...");
+
+        uint32_t raw_humi = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | ((data[3] & 0xF0) >> 4);
+        uint32_t raw_temp = ((uint32_t)(data[3] & 0x0F) << 16) | ((uint32_t)data[4] << 8) | data[5];
+
+        *humidity = (float)raw_humi * 100.0f / 1048576.0f;
+        *temperature = (float)raw_temp * 200.0f / 1048576.0f - 50.0f;
+
+        aht20_->temperature = *temperature;
+        aht20_->humidity = *humidity;
+        aht20_->last_read_ms = esp_timer_get_time() / 1000;
+
+        return ESP_OK;
+    }
+
+    void UpdateSensorData() {
+        if (!aht20_ || !aht20_->initialized) return;
+        uint32_t now = esp_timer_get_time() / 1000;
+        if (now - aht20_->last_read_ms < SENSOR_READ_INTERVAL_MS) {
+            return;
         }
-        else if (emotion == "speaking") {
-            display_->SetEmotion("🗣️");
-            display_->SetStatus("Đang nói...");
+
+        float temp, hum;
+        if (ReadAHT20(&temp, &hum) == ESP_OK) {
+            ESP_LOGD(TAG, "Temp: %.2f°C, Humidity: %.2f%%", temp, hum);
         }
-        else if (emotion == "love") {
-            display_->SetEmotion("😍");
-            display_->SetStatus("Yêu thương!");
+    }
+
+    void InitializeAHT20Mcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ hiện tại", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[32];
+                        snprintf(buffer, sizeof(buffer), "%.1f°C", temp);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc nhiệt độ");
+            });
+
+        mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm hiện tại", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[32];
+                        snprintf(buffer, sizeof(buffer), "%.1f%%", hum);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc độ ẩm");
+            });
+
+        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[64];
+                        snprintf(buffer, sizeof(buffer), "Nhiệt độ: %.1f°C, Độ ẩm: %.1f%%", temp, hum);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc cảm biến");
+            });
+    }
+
+    // ==========================================
+    //  HIỂN THỊ MẮT ĐỘNG
+    // ==========================================
+    void UpdateDisplayAnimation() {
+        if (!display_) return;
+
+        auto& app = Application::GetInstance();
+        
+        static uint32_t last_blink_time = 0;
+        uint32_t now_ms = esp_timer_get_time() / 1000;
+        if (!is_blinking_ && (now_ms - last_blink_time > 4000)) {
+            is_blinking_ = true;
+            last_blink_time = now_ms;
+        } else if (is_blinking_ && (now_ms - last_blink_time > 150)) {
+            is_blinking_ = false;
         }
-        else if (emotion == "confused") {
-            display_->SetEmotion("😕");
-            display_->SetStatus("Bối rối?");
+
+        std::string eyes;
+        if (is_blinking_) {
+            eyes = "- -";
+        } else if (current_emotion_ == "happy") {
+            eyes = "^ ^";
+        } else if (current_emotion_ == "sad") {
+            eyes = "v v";
+        } else if (app.GetDeviceState() == kDeviceStateListening) {
+            eyes = "O O";
+        } else if (app.GetDeviceState() == kDeviceStateSpeaking) {
+            static int frame = 0;
+            frame++;
+            eyes = (frame % 4 == 0) ? "o o" : "O O";
+        } else {
+            eyes = "O O";
         }
-        else {
-            // Neutral
-            display_->SetEmotion("😐");
-            display_->SetStatus("Sẵn sàng");
+
+        display_->SetEmotion(eyes.c_str());
+        display_->SetStatus(GetStatusText().c_str());
+    }
+
+    std::string GetStatusText() {
+        auto& app = Application::GetInstance();
+        switch (app.GetDeviceState()) {
+            case kDeviceStateIdle: return "San sang";
+            case kDeviceStateConnecting: return "Dang ket noi...";
+            case kDeviceStateListening: return "Dang nghe...";
+            case kDeviceStateSpeaking: return "Dang noi...";
+            default: return "San sang";
         }
+    }
+
+    void ShowEmotionDisplay(const std::string& emotion) {
+        current_emotion_ = emotion;
     }
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -236,66 +462,52 @@ private:
         
         ESP_LOGI(TAG, "Emotion: %s", emotion.c_str());
         
-        // Hiển thị emoji + text trên OLED
         ShowEmotionDisplay(emotion);
         
-        // Điều khiển LED + Motor theo cảm xúc
         if (emotion == "happy") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 5, 255, 0, true};
             anim_led2_ = {PATTERN_BREATH, 5, 255, 0, true};
             SetLedTimeout(5);
-            SetLeftMotor(40);
-            SetRightMotor(40);
+            SetLeftMotor(40); SetRightMotor(40);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(-30);
-            SetRightMotor(-30);
+            SetLeftMotor(-30); SetRightMotor(-30);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "sad") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 1, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(5);
-            SetLeftMotor(-20);
-            SetRightMotor(-20);
+            SetLeftMotor(-20); SetRightMotor(-20);
             vTaskDelay(pdMS_TO_TICKS(1000));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "angry") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BLINK_FAST, 15, 255, 0, true};
             anim_led2_ = {PATTERN_BLINK_FAST, 15, 255, 0, true};
             SetLedTimeout(3);
-            SetLeftMotor(60);
-            SetRightMotor(60);
+            SetLeftMotor(60); SetRightMotor(60);
             vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "scared") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BLINK_FAST, 25, 255, 0, true};
             anim_led2_ = {PATTERN_BLINK_FAST, 25, 255, 0, true};
             SetLedTimeout(3);
-            SetLeftMotor(-70);
-            SetRightMotor(-70);
+            SetLeftMotor(-70); SetRightMotor(-70);
             vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
             for (int i = 0; i < 5; i++) {
-                SetLeftMotor(-30);
-                SetRightMotor(30);
+                SetLeftMotor(-30); SetRightMotor(30);
                 vTaskDelay(pdMS_TO_TICKS(100));
-                SetLeftMotor(30);
-                SetRightMotor(-30);
+                SetLeftMotor(30); SetRightMotor(-30);
                 vTaskDelay(pdMS_TO_TICKS(100));
             }
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "love") {
             led_auto_mode_ = false;
@@ -303,67 +515,43 @@ private:
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(5);
             for (int i = 0; i < 3; i++) {
-                SetLeftMotor(-20);
-                SetRightMotor(20);
+                SetLeftMotor(-20); SetRightMotor(20);
                 vTaskDelay(pdMS_TO_TICKS(400));
-                SetLeftMotor(20);
-                SetRightMotor(-20);
+                SetLeftMotor(20); SetRightMotor(-20);
                 vTaskDelay(pdMS_TO_TICKS(400));
             }
-            SetLeftMotor(0);
-            SetRightMotor(0);
-        }
-        else if (emotion == "confused") {
-            led_auto_mode_ = false;
-            anim_led1_ = {PATTERN_BLINK_SLOW, 3, 255, 0, true};
-            anim_led2_ = {PATTERN_BLINK_SLOW, 3, 255, 0, true};
-            SetLedTimeout(3);
-            SetLeftMotor(-30);
-            SetRightMotor(30);
-            vTaskDelay(pdMS_TO_TICKS(400));
-            SetLeftMotor(30);
-            SetRightMotor(-30);
-            vTaskDelay(pdMS_TO_TICKS(400));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "neutral") {
             led_auto_mode_ = true;
             led_timeout_ms_ = 0;
             emotion_auto_mode_ = true;
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "thinking") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 2, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
             SetLedTimeout(10);
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "listening") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 3, 255, 0, true};
             anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
-            SetLeftMotor(-15);
-            SetRightMotor(15);
+            SetLeftMotor(-15); SetRightMotor(15);
             vTaskDelay(pdMS_TO_TICKS(500));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
         else if (emotion == "speaking") {
             led_auto_mode_ = false;
             anim_led1_ = {PATTERN_BREATH, 4, 255, 0, true};
             anim_led2_ = {PATTERN_BREATH, 4, 255, 0, true};
-            SetLeftMotor(15);
-            SetRightMotor(15);
+            SetLeftMotor(15); SetRightMotor(15);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(-10);
-            SetRightMotor(-10);
+            SetLeftMotor(-10); SetRightMotor(-10);
             vTaskDelay(pdMS_TO_TICKS(300));
-            SetLeftMotor(0);
-            SetRightMotor(0);
+            SetLeftMotor(0); SetRightMotor(0);
         }
     }
 
@@ -423,12 +611,15 @@ private:
         
         ApplyLedEffect(LED_1, anim_led1_);
         ApplyLedEffect(LED_2, anim_led2_);
+        
+        UpdateSensorData();
     }
 
     static void LedCreativeTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (1) {
             board->UpdateLedCreative();
+            board->UpdateDisplayAnimation();
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
@@ -523,6 +714,10 @@ private:
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
+    }
+
+    bool ReadMotionDetected() {
+        return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
     }
 
     // ===== ULTRASONIC =====
@@ -675,66 +870,29 @@ private:
     // ===== MCP: SENSOR =====
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
-    }
-
-public:
-    WkEsp32s3Dev() :
-        boot_button_(BOOT_BUTTON_GPIO),
-        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
-        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
-
-#ifdef CONFIG_BOARD_WK_HAVE_MOTOR
-        InitializeMotor();
-        InitializeMotorMcp();
-#endif
-
-        InitializePirSensor();
-        InitializeUltrasonic();
-        InitializeSensorMcp();
-        InitializeLedGpio();
-        InitializeLedMcp();
-        InitializeEmotionMcp();
-        InitializeVolumeMcp();
-        InitializeAdc();
-        InitializeBatteryMcp();
-
-        anim_led1_.active = true;
-        anim_led2_.active = true;
-        xTaskCreate(LedCreativeTask, "led_creative", 4096, this, 5, nullptr);
-
-#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-        InitializeDisplayI2c();
-        InitializeSsd1306Display();
-        ShowEmotionDisplay("neutral");
-#endif
-
-        InitializeButtons();
-        InitializeTools();
         
-        audio_codec_ = GetAudioCodec();
-        if (audio_codec_) {
-            audio_codec_->SetOutputVolume(current_volume_);
-        }
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return ReadMotionDetected() ? "Có chuyển động" : "Không có chuyển động";
+            });
     }
 
-    bool ReadMotionDetected() {
-        return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
-    }
-
+    // ===== DISPLAY =====
+    void InitDisplay() {
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-    void InitializeDisplayI2c() {
-        i2c_master_bus_config_t bus_config = {
-            .i2c_port = (i2c_port_t)0,
-            .sda_io_num = DISPLAY_SDA_PIN,
-            .scl_io_num = DISPLAY_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .flags = {.enable_internal_pullup = 1},
-        };
-        ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &display_i2c_bus_));
-    }
-
-    void InitializeSsd1306Display() {
+        i2c_config_t conf = {};
+        conf.mode = I2C_MODE_MASTER;
+        conf.sda_io_num = DISPLAY_SDA_PIN;
+        conf.scl_io_num = DISPLAY_SCL_PIN;
+        conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+        
+        
+        ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
+        ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0));
+        
         esp_lcd_panel_io_i2c_config_t io_config = {};
         io_config.dev_addr = 0x3C;
         io_config.scl_speed_hz = 400 * 1000;
@@ -743,7 +901,7 @@ public:
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
 
-        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(display_i2c_bus_, &io_config, &panel_io_));
+        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(I2C_NUM_0, &io_config, &panel_io_));
 
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = GPIO_NUM_NC;
@@ -760,8 +918,57 @@ public:
         ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
 
         display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-    }
 #endif
+    }
+
+public:
+    WkEsp32s3Dev() :
+        boot_button_(BOOT_BUTTON_GPIO),
+        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
+
+#ifdef CONFIG_BOARD_WK_HAVE_MOTOR
+        InitializeMotor();
+        InitializeMotorMcp();
+#endif
+
+        InitializePirSensor();
+        InitializeUltrasonic();
+        InitializeLedGpio();
+        InitializeLedMcp();
+        InitializeEmotionMcp();
+        InitializeVolumeMcp();
+        InitializeAdc();
+        InitializeBatteryMcp();
+
+        // ===== KHỞI TẠO AHT20 =====
+        esp_err_t ret = InitAHT20();
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "AHT20 initialization failed, sensor will be disabled");
+        }
+
+        // ===== MCP TOOL CHO AHT20 =====
+        InitializeAHT20Mcp();
+
+        anim_led1_.active = true;
+        anim_led2_.active = true;
+        xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
+
+        InitDisplay();
+        if (display_) {
+            ShowEmotionDisplay("neutral");
+        }
+
+        InitializeButtons();
+        InitializeTools();
+        
+        InitializeSensorMcp();
+        
+        audio_codec_ = GetAudioCodec();
+        if (audio_codec_) {
+            audio_codec_->SetOutputVolume(current_volume_);
+        }
+    }
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
@@ -803,13 +1010,6 @@ public:
 
 // ===== SENSOR CONTROLLER =====
 SensorController::SensorController(WkEsp32s3Dev* board) {
-    auto& mcp = McpServer::GetInstance();
-
-    mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
-        PropertyList(),
-        [board](const PropertyList& p) -> ReturnValue {
-            return board->ReadMotionDetected() ? "Có chuyển động" : "Không có chuyển động";
-        });
 }
 
 DECLARE_BOARD(WkEsp32s3Dev);
