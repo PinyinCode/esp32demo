@@ -77,6 +77,11 @@ class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
     Display* display_ = nullptr;
+    
+    // ===== DISPLAY VARIABLES =====
+    esp_lcd_panel_io_handle_t panel_io_ = nullptr;
+    esp_lcd_panel_handle_t panel_ = nullptr;
+    
     Button volume_up_button_;
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
@@ -147,7 +152,6 @@ private:
             return ESP_ERR_NO_MEM;
         }
 
-        // Cấu hình I2C master cho ESP-IDF v4.4
         i2c_config_t conf = {
             .mode = I2C_MODE_MASTER,
             .sda_io_num = AHT20_SDA_PIN,
@@ -173,7 +177,6 @@ private:
             return ret;
         }
 
-        // Soft reset
         ret = aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to reset AHT20");
@@ -181,7 +184,6 @@ private:
         }
         vTaskDelay(pdMS_TO_TICKS(20));
 
-        // Kiểm tra trạng thái
         uint8_t status;
         ret = aht20_read(&status, 1);
         if (ret != ESP_OK) {
@@ -903,7 +905,7 @@ private:
         io_config.lcd_cmd_bits = 8;
         io_config.lcd_param_bits = 8;
 
-        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(display_i2c_bus_, &io_config, &panel_io_));
+        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(I2C_NUM_0, &io_config, &panel_io_));
 
         esp_lcd_panel_dev_config_t panel_config = {};
         panel_config.reset_gpio_num = GPIO_NUM_NC;
@@ -957,7 +959,9 @@ public:
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
 
         InitDisplay();
-        ShowEmotionDisplay("neutral");
+        if (display_) {
+            ShowEmotionDisplay("neutral");
+        }
 
         InitializeButtons();
         InitializeTools();
