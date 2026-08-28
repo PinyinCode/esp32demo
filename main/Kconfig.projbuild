@@ -1143,4 +1143,4 @@ config AHT20_I2C_ADDR
     hex "AHT20 I2C Address"
     default 0x38
     depends on AHT20_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
-
+endmenu
