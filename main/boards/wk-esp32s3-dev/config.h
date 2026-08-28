@@ -3,6 +3,7 @@
 
 #include <driver/gpio.h>
 #include <esp_adc/adc_oneshot.h>
+#include "sdkconfig.h"
 
 // ===== CẤU HÌNH ÂM THANH =====
 #define AUDIO_INPUT_SAMPLE_RATE  16000
@@ -34,11 +35,9 @@
 #define AHT20_SCL_PIN   GPIO_NUM_18
 #define AHT20_I2C_ADDR  0x38
 
-
 // ===== CẢM BIẾN KHOẢNG CÁCH (I2C - VL53L0X/TOF) =====
 #define ULTRASONIC_SCL_PIN GPIO_NUM_39
 #define ULTRASONIC_SDA_PIN GPIO_NUM_40
-
 
 // ===== ĐỘNG CƠ DRV8833 =====
 #define DRV8833_IN1 GPIO_NUM_1
@@ -64,8 +63,14 @@
 // ===== NÚT BOOT =====
 #define BOOT_BUTTON_GPIO GPIO_NUM_0
 
+// ===== CẢM BIẾN CHẠM (TOUCH SENSOR) =====
+#if CONFIG_TOUCH_SENSOR_ENABLED
+    #define TOUCH_BUTTON_GPIO   (gpio_num_t)CONFIG_TOUCH_SENSOR_GPIO
+#else
+    #define TOUCH_BUTTON_GPIO   GPIO_NUM_NC
+#endif
+
 // ===== KHÔNG DÙNG =====
-#define TOUCH_BUTTON_GPIO       GPIO_NUM_NC
 #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
 #define VOLUME_DOWN_BUTTON_GPIO GPIO_NUM_NC
 #define DISPLAY_BACKLIGHT_PIN   GPIO_NUM_NC
