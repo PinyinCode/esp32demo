@@ -42,8 +42,6 @@ class WkEsp32s3Dev;
 #define TOF_I2C_PORT           I2C_NUM_0
 #define TOF_I2C_ADDR           0x29
 
-
-
 typedef struct {
     bool initialized;
     bool calibrated;
@@ -82,7 +80,7 @@ struct LedAnimation {
 class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
-    Button touch_button_; // Cảm biến chạm
+    Button touch_button_;
     Display* display_ = nullptr;
     
     // ===== DISPLAY VARIABLES =====
@@ -114,7 +112,6 @@ private:
     
     uint32_t led_timeout_ms_ = 0;
     uint32_t led_timeout_start_ = 0;
-    const int DEFAULT_LED_DURATION_ = 30;
 
     std::string current_emotion_ = "neutral";
     bool emotion_auto_mode_ = true;
@@ -170,10 +167,8 @@ private:
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
         if (!ir_initialized_) return false;
 
-        // Nếu đang bật chế độ học lệnh, tiến hành đo xung
         if (is_learning_mode) {
             int level = gpio_get_level(IR_RECEIVER_GPIO);
-            // Bắt đầu khi có tín hiệu kéo xuống (mức LOW)
             if (level == 0) {
                 uint32_t start_time = (uint32_t)esp_timer_get_time();
                 int count = 0;
@@ -188,7 +183,6 @@ private:
                         last_edge = now;
                         last_level = current_level;
                     }
-                    // Timeout sau 50ms không có sự thay đổi xung
                     if ((esp_timer_get_time() - last_edge) > 50000) break; 
                 }
                 
@@ -270,7 +264,7 @@ private:
     }
 
     // ==========================================
-    //  AHT20 FUNCTIONS
+    //  AHT20 FUNCTIONS (Sử dụng chân từ config.h)
     // ==========================================
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
@@ -303,8 +297,7 @@ private:
     }
 
     esp_err_t InitAHT20() {
-#ifdef CONFIG_AHT20_ENABLED
-        ESP_LOGI(TAG, "Initializing AHT20 sensor...");
+        ESP_LOGI(TAG, "Initializing AHT20 sensor using SDA: %d, SCL: %d...", (int)AHT20_SDA_PIN, (int)AHT20_SCL_PIN);
 
         aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
         if (!aht20_) {
@@ -362,9 +355,6 @@ private:
         ReadAHT20(&temp, &hum);
         aht20_->last_read_ms = esp_timer_get_time() / 1000;
         return ESP_OK;
-#else
-        return ESP_ERR_NOT_SUPPORTED;
-#endif
     }
 
     esp_err_t ReadAHT20(float* temperature, float* humidity) {
@@ -707,8 +697,12 @@ private:
         }
     }
 
-    // ===== CẢM BIẾN KHOẢNG CÁCH (TOF) =====
+    // ==========================================
+    //  CẢM BIẾN KHOẢNG CÁCH / TOF (Dùng từ config.h)
+    // ==========================================
     void InitializeUltrasonic() {
+        ESP_LOGI(TAG, "Initializing ToF sensor using SDA: %d, SCL: %d...", (int)ULTRASONIC_SDA_PIN, (int)ULTRASONIC_SCL_PIN);
+
         i2c_config_t conf = {};
         conf.mode = I2C_MODE_MASTER;
         conf.sda_io_num = ULTRASONIC_SDA_PIN;
