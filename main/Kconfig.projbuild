@@ -1123,6 +1123,7 @@ menu "TAIJIPAI_S3_CONFIG"
     help
         启动双声道
 endmenu
+
 # ===== AHT20 TEMPERATURE/HUMIDITY SENSOR =====
 config AHT20_ENABLED
     bool "Enable AHT20 Temperature/Humidity Sensor"
@@ -1143,6 +1144,7 @@ config AHT20_I2C_ADDR
     hex "AHT20 I2C Address"
     default 0x38
     depends on AHT20_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+
 # ===== TOUCH SENSOR CONFIGURATION =====
 config TOUCH_SENSOR_ENABLED
     bool "Enable Touch Sensor"
@@ -1164,6 +1166,7 @@ config TOUCH_SENSOR_THRESHOLD
     depends on TOUCH_SENSOR_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
     help
         The threshold value below which a touch is detected. Adjust based on hardware testing.
+
 # ===== INFRARED (IR) CONFIGURATION =====
 config IR_SENSOR_ENABLED
     bool "Enable Infrared (IR) Control"
