@@ -89,7 +89,6 @@ private:
 
     // ===== AHT20 VARIABLES =====
     aht20_handle_t* aht20_ = nullptr;
-    i2c_master_bus_handle_t aht20_i2c_bus_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
@@ -110,19 +109,19 @@ private:
     // ==========================================
     //  AHT20 FUNCTIONS
     // ==========================================
-    esp_err_t aht20_write_cmd(uint8_t cmd, const uint8_t* data, size_t len) {
-        if (!aht20_) return ESP_ERR_INVALID_STATE;
+    esp_err_t aht20_write_cmd(aht20_handle_t* handle, uint8_t cmd, const uint8_t* data, size_t len) {
+        if (!handle) return ESP_ERR_INVALID_STATE;
         uint8_t buffer[5] = {cmd};
         if (data && len > 0) {
             memcpy(buffer + 1, data, len);
-            return i2c_master_transmit(aht20_->dev, buffer, len + 1, -1);
+            return i2c_master_transmit(handle->dev, buffer, len + 1, -1);
         }
-        return i2c_master_transmit(aht20_->dev, buffer, 1, -1);
+        return i2c_master_transmit(handle->dev, buffer, 1, -1);
     }
 
-    esp_err_t aht20_read_data(uint8_t* data, size_t len) {
-        if (!aht20_) return ESP_ERR_INVALID_STATE;
-        return i2c_master_receive(aht20_->dev, data, len, -1);
+    esp_err_t aht20_read_data(aht20_handle_t* handle, uint8_t* data, size_t len) {
+        if (!handle) return ESP_ERR_INVALID_STATE;
+        return i2c_master_receive(handle->dev, data, len, -1);
     }
 
     esp_err_t InitAHT20() {
@@ -152,7 +151,7 @@ private:
             return ret;
         }
 
-        // Tạo device
+        // Tạo device - Cách viết đúng cho ESP-IDF v5.0+
         i2c_master_dev_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = AHT20_I2C_ADDR,
@@ -168,7 +167,7 @@ private:
         }
 
         // Soft reset
-        ret = aht20_write_cmd(AHT20_CMD_SOFT_RESET, NULL, 0);
+        ret = aht20_write_cmd(aht20_, AHT20_CMD_SOFT_RESET, NULL, 0);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to reset AHT20");
             return ret;
@@ -177,7 +176,7 @@ private:
 
         // Kiểm tra trạng thái
         uint8_t status;
-        ret = aht20_read_data(&status, 1);
+        ret = aht20_read_data(aht20_, &status, 1);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to read AHT20 status");
             return ret;
@@ -188,14 +187,14 @@ private:
             ESP_LOGI(TAG, "AHT20 already calibrated");
         } else {
             uint8_t cmd_data[2] = {0x08, 0x00};
-            ret = aht20_write_cmd(AHT20_CMD_CALIBRATE, cmd_data, 2);
+            ret = aht20_write_cmd(aht20_, AHT20_CMD_CALIBRATE, cmd_data, 2);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to calibrate AHT20");
                 return ret;
             }
             vTaskDelay(pdMS_TO_TICKS(300));
             
-            ret = aht20_read_data(&status, 1);
+            ret = aht20_read_data(aht20_, &status, 1);
             if (ret == ESP_OK && (status & 0x08)) {
                 aht20_->calibrated = true;
                 ESP_LOGI(TAG, "AHT20 calibrated successfully");
@@ -223,13 +222,13 @@ private:
         }
 
         uint8_t cmd_data[3] = {0x33, 0x00, 0x00};
-        esp_err_t ret = aht20_write_cmd(AHT20_CMD_TRIGGER, cmd_data, 3);
+        esp_err_t ret = aht20_write_cmd(aht20_, AHT20_CMD_TRIGGER, cmd_data, 3);
         if (ret != ESP_OK) return ret;
 
         vTaskDelay(pdMS_TO_TICKS(80));
 
         uint8_t data[6];
-        ret = aht20_read_data(data, 6);
+        ret = aht20_read_data(aht20_, data, 6);
         if (ret != ESP_OK) return ret;
 
         if (data[0] & 0x80) {
@@ -316,7 +315,6 @@ private:
 
         auto& app = Application::GetInstance();
         
-        // Logic chớp mắt (mỗi 4 giây chớp 1 lần, kéo dài 150ms)
         static uint32_t last_blink_time = 0;
         uint32_t now_ms = esp_timer_get_time() / 1000;
         if (!is_blinking_ && (now_ms - last_blink_time > 4000)) {
@@ -326,26 +324,23 @@ private:
             is_blinking_ = false;
         }
 
-        // Chọn hình dạng mắt (dùng ký tự đơn giản cho OLED)
         std::string eyes;
         if (is_blinking_) {
-            eyes = "- -"; // Mắt nhắm
+            eyes = "- -";
         } else if (current_emotion_ == "happy") {
-            eyes = "^ ^"; // Mắt cười
+            eyes = "^ ^";
         } else if (current_emotion_ == "sad") {
-            eyes = "v v"; // Mắt buồn
+            eyes = "v v";
         } else if (app.GetDeviceState() == kDeviceStateListening) {
-            eyes = "O O"; // Mắt to khi nghe
+            eyes = "O O";
         } else if (app.GetDeviceState() == kDeviceStateSpeaking) {
-            // Khi nói: mắt to rồi nhỏ lại liên tục
             static int frame = 0;
             frame++;
             eyes = (frame % 4 == 0) ? "o o" : "O O";
         } else {
-            eyes = "O O"; // Mắt mở bình thường
+            eyes = "O O";
         }
 
-        // Cập nhật lên màn hình bằng API chuẩn
         display_->SetEmotion(eyes.c_str());
         display_->SetStatus(GetStatusText().c_str());
     }
@@ -361,7 +356,6 @@ private:
         }
     }
 
-    // Hàm giữ để tương thích với logic cũ
     void ShowEmotionDisplay(const std::string& emotion) {
         current_emotion_ = emotion;
     }
@@ -868,7 +862,6 @@ private:
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
         
-        // Thêm tool motion detection vào đây
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
             PropertyList(),
@@ -903,6 +896,9 @@ public:
             ESP_LOGW(TAG, "AHT20 initialization failed, sensor will be disabled");
         }
 
+        // ===== THÊM MCP TOOL CHO AHT20 =====
+        InitializeAHT20Mcp();
+
         anim_led1_.active = true;
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
@@ -916,8 +912,6 @@ public:
         InitializeButtons();
         InitializeTools();
         
-        // ===== THÊM MCP TOOL CHO AHT20 =====
-        InitializeAHT20Mcp();
         InitializeSensorMcp();
         
         audio_codec_ = GetAudioCodec();
