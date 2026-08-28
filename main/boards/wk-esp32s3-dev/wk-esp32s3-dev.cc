@@ -28,6 +28,12 @@
 #include <string>
 #include <cstring>
 
+// ===== THƯ VIỆN HỒNG NGOẠI (IRremoteESP8266) =====
+#include <IRremoteESP8266.h>
+#include <IRrecv.h>
+#include <IRsend.h>
+#include <ir_Gree.h>
+
 #define TAG "WkEsp32s3Dev"
 
 class WkEsp32s3Dev;
@@ -41,6 +47,10 @@ class WkEsp32s3Dev;
 // ===== TOF I2C DEFINITIONS =====
 #define TOF_I2C_PORT           I2C_NUM_0
 #define TOF_I2C_ADDR           0x29
+
+// ===== HỒNG NGOẠI DEFINITIONS =====
+#define IR_RECEIVER_GPIO       GPIO_NUM_38
+#define IR_TRANSMITTER_GPIO    GPIO_NUM_47
 
 typedef struct {
     bool initialized;
@@ -98,6 +108,12 @@ private:
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
+    // ===== IR VARIABLES =====
+    IRrecv* ir_recv_ = nullptr;
+    IRsend* ir_send_ = nullptr;
+    decode_results ir_results_;
+    std::string last_captured_ir_code_ = "Chưa có";
+
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
@@ -114,9 +130,86 @@ private:
     friend class SensorController;
 
     // ==========================================
+    //  HỒNG NGOẠI (IR) FUNCTIONS & MCP
+    // ==========================================
+    void InitializeInfrared() {
+        ESP_LOGI(TAG, "Initializing Infrared (IR) module...");
+        ir_send_ = new IRsend(IR_TRANSMITTER_GPIO);
+        ir_send_->begin();
+
+        ir_recv_ = new IRrecv(IR_RECEIVER_GPIO, 1024, 50, true);
+        ir_recv_->enableIRIn();
+        ESP_LOGI(TAG, "IR Initialized. Recv Pin: %d, Send Pin: %d", IR_RECEIVER_GPIO, IR_TRANSMITTER_GPIO);
+    }
+
+    void CheckInfraredReceive() {
+        if (ir_recv_ && ir_recv_->decode(&ir_results_)) {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "Type: %d, Code: 0x%lX, Bits: %d", 
+                     ir_results_.decode_type, (unsigned long)ir_results_.value, ir_results_.bits);
+            last_captured_ir_code_ = std::string(buffer);
+            ESP_LOGI(TAG, "IR Captured: %s", last_captured_ir_code_.c_str());
+            ir_recv_->resume();
+        }
+    }
+
+    static void IrTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        while (1) {
+            board->CheckInfraredReceive();
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+
+    void InitializeInfraredMcp() {
+        auto& mcp = McpServer::GetInstance();
+
+        mcp.AddTool("self.ir.get_last_code", "Lấy mã hồng ngoại vừa quét được từ remote", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return "Mã IR gần nhất: " + last_captured_ir_code_;
+            });
+
+        mcp.AddTool("self.ir.send_raw_hex", "Phát lệnh hồng ngoại dạng mã Hex (NEC protocol)", 
+            PropertyList({
+                Property("data", kPropertyTypeString, "0x12345678"),
+                Property("bits", kPropertyTypeInteger, 32, 8, 64)
+            }),
+            [this](const PropertyList& p) -> ReturnValue {
+                std::string hex_str = p["data"].value<std::string>();
+                int bits = p["bits"].value<int>();
+                unsigned long code = strtoul(hex_str.c_str(), nullptr, 0);
+                if (ir_send_) {
+                    ir_send_->sendNEC(code, bits);
+                    return "Đã phát lệnh IR thành công: " + hex_str;
+                }
+                return "Lỗi: IR Transmitter chưa khởi tạo";
+            });
+
+        mcp.AddTool("self.ir.ac_control", "Bật điều hòa qua hồng ngoại", 
+            PropertyList({
+                Property("state", kPropertyTypeString, "on"),
+                Property("temp", kPropertyTypeInteger, 26, 16, 30)
+            }),
+            [this](const PropertyList& p) -> ReturnValue {
+                int temp = p["temp"].value<int>();
+                if (ir_send_) {
+                    IRGreeAC ac(IR_TRANSMITTER_GPIO);
+                    ac.begin();
+                    ac.on();
+                    ac.setTemp(temp);
+                    ac.setMode(kGreeCool);
+                    ac.setFan(kGreeFanAuto);
+                    ac.send();
+                    return "Đã gửi lệnh điều hòa nhiệt độ: " + std::to_string(temp) + "°C";
+                }
+                return "Lỗi phát tín hiệu AC";
+            });
+    }
+
+    // ==========================================
     //  AHT20 FUNCTIONS
     // ==========================================
-    
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
         i2c_master_start(cmd_handle);
@@ -712,8 +805,8 @@ private:
     void InitializeUltrasonic() {
         i2c_config_t conf = {};
         conf.mode = I2C_MODE_MASTER;
-        conf.sda_io_num = ULTRASONIC_SDA_PIN; // GPIO 40
-        conf.scl_io_num = ULTRASONIC_SCL_PIN; // GPIO 39
+        conf.sda_io_num = ULTRASONIC_SDA_PIN;
+        conf.scl_io_num = ULTRASONIC_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
 
@@ -990,9 +1083,14 @@ public:
         // ===== MCP TOOL CHO AHT20 =====
         InitializeAHT20Mcp();
 
+        // ===== KHỞI TẠO HỒNG NGOẠI & MCP TOOLS IR =====
+        InitializeInfrared();
+        InitializeInfraredMcp();
+
         anim_led1_.active = true;
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
+        xTaskCreate(IrTask, "ir_task", 4096, this, 4, nullptr);
 
         InitDisplay();
         if (display_) {
