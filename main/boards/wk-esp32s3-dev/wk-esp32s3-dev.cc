@@ -23,6 +23,8 @@
 #include <esp_adc/adc_oneshot.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <nvs_flash.h>
+#include <nvs.h>
 #include <math.h>
 #include <algorithm>
 #include <string>
@@ -120,10 +122,66 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HỒNG NGOẠI (IR) & HỌC LỆNH FUNCTIONS & MCP
+    //  HỒNG NGOẠI (IR) & LƯU TRỮ VĨNH VIỄN NVS
     // ==========================================
+    void SaveIrToNvs() {
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open("ir_storage", NVS_READWRITE, &nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Error (%s) opening NVS handle for IR save!", esp_err_to_name(err));
+            return;
+        }
+
+        // Lưu độ dài mảng xung
+        err = nvs_set_i32(nvs_handle, "ir_len", ir_raw_len);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save ir_len to NVS");
+        }
+
+        // Lưu toàn bộ mảng dữ liệu thô xung IR dưới dạng blob
+        err = nvs_set_blob(nvs_handle, "ir_data", ir_raw_intervals, sizeof(uint32_t) * ir_raw_len);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to save ir_data blob to NVS");
+        } else {
+            err = nvs_commit(nvs_handle);
+            if (err == ESP_OK) {
+                ESP_LOGI(TAG, ">>> ĐÃ LƯU MÃ IR VĨNH VIỄN VÀO NVS THÀNH CÔNG! (Số xung: %d)", ir_raw_len);
+            }
+        }
+        nvs_close(nvs_handle);
+    }
+
+    void LoadIrFromNvs() {
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open("ir_storage", NVS_READONLY, &nvs_handle);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Chưa có mã IR nào được lưu trong NVS trước đó.");
+            ir_raw_len = 0;
+            last_captured_ir_code_ = "Chưa có";
+            return;
+        }
+
+        int32_t len = 0;
+        err = nvs_get_i32(nvs_handle, "ir_len", &len);
+        if (err == ESP_OK && len > 0 && len <= 150) {
+            ir_raw_len = len;
+            size_t required_size = sizeof(uint32_t) * ir_raw_len;
+            err = nvs_get_blob(nvs_handle, "ir_data", ir_raw_intervals, &required_size);
+            if (err == ESP_OK) {
+                last_captured_ir_code_ = "Raw_Len_" + std::to_string(ir_raw_len);
+                ESP_LOGI(TAG, ">>> ĐÃ TẢI THÀNH CÔNG MÃ IR TỪ NVS! (Số xung: %d)", ir_raw_len);
+            } else {
+                ESP_LOGE(TAG, "Lỗi đọc blob dữ liệu IR từ NVS");
+                ir_raw_len = 0;
+            }
+        } else {
+            ir_raw_len = 0;
+        }
+        nvs_close(nvs_handle);
+    }
+
     void InitializeInfrared() {
-        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
+        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning & NVS feature...");
 
         gpio_config_t io_conf_tx = {};
         io_conf_tx.intr_type = GPIO_INTR_DISABLE;
@@ -142,6 +200,10 @@ private:
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
+        
+        // Tải mã IR đã lưu từ trước khi khởi động
+        LoadIrFromNvs();
+
         ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
@@ -158,10 +220,10 @@ private:
 
     void ReplayLearnedIr() {
         if (!ir_initialized_ || ir_raw_len == 0) {
-            ESP_LOGW(TAG, "Chưa có mã IR nào được học để phát lại!");
+            ESP_LOGW(TAG, "Chưa có mã IR nào được học hoặc tải từ bộ nhớ!");
             return;
         }
-        ESP_LOGI(TAG, "Đang phát lại mã IR đã học (Tổng số xung: %d)...", ir_raw_len);
+        ESP_LOGI(TAG, "Đang phát lại mã IR đã học/lưu vĩnh viễn (Tổng số xung: %d)...", ir_raw_len);
     }
 
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
@@ -190,7 +252,10 @@ private:
                     ir_raw_len = count;
                     is_learning_mode = false;
                     last_captured_ir_code_ = "Raw_Len_" + std::to_string(ir_raw_len);
-                    ESP_LOGI(TAG, ">>> ĐÃ HỌC XONG MÃ IR THÀNH CÔNG! Số xung: %d", ir_raw_len);
+                    ESP_LOGI(TAG, ">>> ĐÃ HỌC XONG VÀ LƯU VĨNH VIỄN MÃ IR! Số xung: %d", ir_raw_len);
+                    
+                    // Ghi đè trực tiếp vào NVS để lưu vĩnh viễn
+                    SaveIrToNvs();
                     return true;
                 }
             }
@@ -218,17 +283,17 @@ private:
                 return "Đã sẵn sàng học lệnh IR. Hãy bấm remote trong vòng 5 giây tới!";
             });
 
-        mcp.AddTool("self.ir.get_last_code", "Lấy mã hồng ngoại vừa quét/học được", 
+        mcp.AddTool("self.ir.get_last_code", "Lấy mã hồng ngoại vừa quét/học được hoặc đang lưu", 
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                return "Mã IR gần nhất: " + last_captured_ir_code_ + " (Số xung: " + std::to_string(ir_raw_len) + ")";
+                return "Mã IR hiện tại: " + last_captured_ir_code_ + " (Số xung lưu trữ: " + std::to_string(ir_raw_len) + ")";
             });
 
-        mcp.AddTool("self.ir.replay", "Phát lại mã hồng ngoại vừa học", 
+        mcp.AddTool("self.ir.replay", "Phát lại mã hồng ngoại đã lưu vĩnh viễn", 
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 ReplayLearnedIr();
-                return "Đã phát lại lệnh IR vừa học.";
+                return "Đã phát lại lệnh IR đã lưu.";
             });
 
         mcp.AddTool("self.ir.send_raw_hex", "Phát lệnh hồng ngoại tự viết dạng mã Hex", 
