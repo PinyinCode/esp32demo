@@ -13,7 +13,7 @@ jobs:
     name: Build WK ESP32S3 Dev Board
     runs-on: ubuntu-latest
     container:
-      image: espressif/idf:v5.5.2
+      image: espressif/idf:v5.2.3
     steps:
       - name: Checkout
         uses: actions/checkout@v4
