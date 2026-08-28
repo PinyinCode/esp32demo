@@ -42,9 +42,7 @@ class WkEsp32s3Dev;
 #define TOF_I2C_PORT           I2C_NUM_0
 #define TOF_I2C_ADDR           0x29
 
-// ===== HỒNG NGOẠI DEFINITIONS =====
-#define IR_RECEIVER_GPIO       GPIO_NUM_38
-#define IR_TRANSMITTER_GPIO    GPIO_NUM_47
+
 
 typedef struct {
     bool initialized;
