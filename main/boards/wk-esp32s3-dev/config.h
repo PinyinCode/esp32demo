@@ -30,7 +30,6 @@
 #define DISPLAY_MIRROR_Y true
 
 // ===== CẢM BIẾN AHT20 =====
-// Sử dụng GPIO_NUM_* thay vì CONFIG_* để tránh lỗi ép kiểu
 #define AHT20_SDA_PIN   GPIO_NUM_17
 #define AHT20_SCL_PIN   GPIO_NUM_18
 #define AHT20_I2C_ADDR  0x38
