@@ -26,10 +26,25 @@
 #include <math.h>
 #include <algorithm>
 #include <string>
+#include <cstring>
 
 #define TAG "WkEsp32s3Dev"
 
 class WkEsp32s3Dev;
+
+// ===== AHT20 DEFINITIONS =====
+#define AHT20_CMD_CALIBRATE    0xBE
+#define AHT20_CMD_TRIGGER      0xAC
+#define AHT20_CMD_SOFT_RESET   0xBA
+
+typedef struct {
+    i2c_master_bus_handle_t bus;
+    i2c_master_dev_handle_t dev;
+    bool calibrated;
+    float temperature;
+    float humidity;
+    uint32_t last_read_ms;
+} aht20_handle_t;
 
 // ===== SENSOR CONTROLLER =====
 class SensorController {
@@ -72,6 +87,11 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
+    // ===== AHT20 VARIABLES =====
+    aht20_handle_t* aht20_ = nullptr;
+    i2c_master_bus_handle_t aht20_i2c_bus_ = nullptr;
+    const int SENSOR_READ_INTERVAL_MS = 2000;
+
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
     uint32_t led_tick_ = 0;
@@ -86,6 +106,207 @@ private:
     bool is_blinking_ = false;
 
     friend class SensorController;
+
+    // ==========================================
+    //  AHT20 FUNCTIONS
+    // ==========================================
+    esp_err_t aht20_write_cmd(uint8_t cmd, const uint8_t* data, size_t len) {
+        if (!aht20_) return ESP_ERR_INVALID_STATE;
+        uint8_t buffer[5] = {cmd};
+        if (data && len > 0) {
+            memcpy(buffer + 1, data, len);
+            return i2c_master_transmit(aht20_->dev, buffer, len + 1, -1);
+        }
+        return i2c_master_transmit(aht20_->dev, buffer, 1, -1);
+    }
+
+    esp_err_t aht20_read_data(uint8_t* data, size_t len) {
+        if (!aht20_) return ESP_ERR_INVALID_STATE;
+        return i2c_master_receive(aht20_->dev, data, len, -1);
+    }
+
+    esp_err_t InitAHT20() {
+#ifdef CONFIG_AHT20_ENABLED
+        ESP_LOGI(TAG, "Initializing AHT20 sensor...");
+
+        aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
+        if (!aht20_) {
+            ESP_LOGE(TAG, "Failed to allocate AHT20 handle");
+            return ESP_ERR_NO_MEM;
+        }
+
+        // Tạo bus I2C cho AHT20 (dùng port 1)
+        i2c_master_bus_config_t bus_config = {
+            .i2c_port = (i2c_port_t)1,
+            .sda_io_num = AHT20_SDA_PIN,
+            .scl_io_num = AHT20_SCL_PIN,
+            .clk_source = I2C_CLK_SRC_DEFAULT,
+            .glitch_ignore_cnt = 7,
+            .flags = { .enable_internal_pullup = 1 },
+        };
+        esp_err_t ret = i2c_new_master_bus(&bus_config, &aht20_->bus);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to create I2C bus for AHT20");
+            free(aht20_);
+            aht20_ = nullptr;
+            return ret;
+        }
+
+        // Tạo device
+        i2c_master_dev_config_t dev_cfg = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+            .device_address = AHT20_I2C_ADDR,
+            .scl_speed_hz = 100000,
+        };
+        ret = i2c_master_bus_add_device(aht20_->bus, &dev_cfg, &aht20_->dev);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to add AHT20 device");
+            i2c_del_master_bus(aht20_->bus);
+            free(aht20_);
+            aht20_ = nullptr;
+            return ret;
+        }
+
+        // Soft reset
+        ret = aht20_write_cmd(AHT20_CMD_SOFT_RESET, NULL, 0);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to reset AHT20");
+            return ret;
+        }
+        vTaskDelay(pdMS_TO_TICKS(20));
+
+        // Kiểm tra trạng thái
+        uint8_t status;
+        ret = aht20_read_data(&status, 1);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Failed to read AHT20 status");
+            return ret;
+        }
+
+        if (status & 0x08) {
+            aht20_->calibrated = true;
+            ESP_LOGI(TAG, "AHT20 already calibrated");
+        } else {
+            uint8_t cmd_data[2] = {0x08, 0x00};
+            ret = aht20_write_cmd(AHT20_CMD_CALIBRATE, cmd_data, 2);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to calibrate AHT20");
+                return ret;
+            }
+            vTaskDelay(pdMS_TO_TICKS(300));
+            
+            ret = aht20_read_data(&status, 1);
+            if (ret == ESP_OK && (status & 0x08)) {
+                aht20_->calibrated = true;
+                ESP_LOGI(TAG, "AHT20 calibrated successfully");
+            } else {
+                ESP_LOGW(TAG, "AHT20 calibration failed");
+                aht20_->calibrated = false;
+            }
+        }
+
+        float temp, hum;
+        ReadAHT20(&temp, &hum);
+        aht20_->last_read_ms = esp_timer_get_time() / 1000;
+        
+        ESP_LOGI(TAG, "AHT20 initialized successfully");
+        return ESP_OK;
+#else
+        ESP_LOGW(TAG, "AHT20 disabled in config");
+        return ESP_ERR_NOT_SUPPORTED;
+#endif
+    }
+
+    esp_err_t ReadAHT20(float* temperature, float* humidity) {
+        if (!aht20_ || !aht20_->calibrated) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        uint8_t cmd_data[3] = {0x33, 0x00, 0x00};
+        esp_err_t ret = aht20_write_cmd(AHT20_CMD_TRIGGER, cmd_data, 3);
+        if (ret != ESP_OK) return ret;
+
+        vTaskDelay(pdMS_TO_TICKS(80));
+
+        uint8_t data[6];
+        ret = aht20_read_data(data, 6);
+        if (ret != ESP_OK) return ret;
+
+        if (data[0] & 0x80) {
+            return ESP_ERR_INVALID_STATE;
+        }
+
+        uint32_t raw_humi = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | ((data[3] & 0xF0) >> 4);
+        uint32_t raw_temp = ((uint32_t)(data[3] & 0x0F) << 16) | ((uint32_t)data[4] << 8) | data[5];
+
+        *humidity = (float)raw_humi * 100.0f / 1048576.0f;
+        *temperature = (float)raw_temp * 200.0f / 1048576.0f - 50.0f;
+
+        aht20_->temperature = *temperature;
+        aht20_->humidity = *humidity;
+        aht20_->last_read_ms = esp_timer_get_time() / 1000;
+
+        return ESP_OK;
+    }
+
+    void UpdateSensorData() {
+        if (!aht20_) return;
+        uint32_t now = esp_timer_get_time() / 1000;
+        if (now - aht20_->last_read_ms < SENSOR_READ_INTERVAL_MS) {
+            return;
+        }
+
+        float temp, hum;
+        if (ReadAHT20(&temp, &hum) == ESP_OK) {
+            ESP_LOGD(TAG, "Temp: %.2f°C, Humidity: %.2f%%", temp, hum);
+        }
+    }
+
+    void InitializeAHT20Mcp() {
+        auto& mcp = McpServer::GetInstance();
+        
+        mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ hiện tại", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[32];
+                        snprintf(buffer, sizeof(buffer), "%.1f°C", temp);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc nhiệt độ");
+            });
+
+        mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm hiện tại", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[32];
+                        snprintf(buffer, sizeof(buffer), "%.1f%%", hum);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc độ ẩm");
+            });
+
+        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[64];
+                        snprintf(buffer, sizeof(buffer), "Nhiệt độ: %.1f°C, Độ ẩm: %.1f%%", temp, hum);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc cảm biến");
+            });
+    }
 
     // ==========================================
     //  HIỂN THỊ MẮT ĐỘNG DÙNG API CHUẨN CỦA DISPLAY
@@ -140,10 +361,9 @@ private:
         }
     }
 
-    // Hàm giữ để tương thích với logic cũ, nhưng không còn lỗi
+    // Hàm giữ để tương thích với logic cũ
     void ShowEmotionDisplay(const std::string& emotion) {
         current_emotion_ = emotion;
-        // Animation sẽ được vẽ liên tục trong UpdateDisplayAnimation
     }
 
     // ===== LED EFFECT FUNCTIONS =====
@@ -387,13 +607,16 @@ private:
         
         ApplyLedEffect(LED_1, anim_led1_);
         ApplyLedEffect(LED_2, anim_led2_);
+        
+        // Cập nhật dữ liệu cảm biến
+        UpdateSensorData();
     }
 
     static void LedCreativeTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (1) {
             board->UpdateLedCreative();
-            board->UpdateDisplayAnimation(); // <-- THÊM DÒNG NÀY
+            board->UpdateDisplayAnimation();
             vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
@@ -488,6 +711,10 @@ private:
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
+    }
+
+    bool ReadMotionDetected() {
+        return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
     }
 
     // ===== ULTRASONIC =====
@@ -640,6 +867,14 @@ private:
     // ===== MCP: SENSOR =====
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
+        
+        // Thêm tool motion detection vào đây
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return ReadMotionDetected() ? "Có chuyển động" : "Không có chuyển động";
+            });
     }
 
 public:
@@ -655,13 +890,18 @@ public:
 
         InitializePirSensor();
         InitializeUltrasonic();
-        InitializeSensorMcp();
         InitializeLedGpio();
         InitializeLedMcp();
         InitializeEmotionMcp();
         InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
+
+        // ===== KHỞI TẠO AHT20 =====
+        esp_err_t ret = InitAHT20();
+        if (ret != ESP_OK) {
+            ESP_LOGW(TAG, "AHT20 initialization failed, sensor will be disabled");
+        }
 
         anim_led1_.active = true;
         anim_led2_.active = true;
@@ -676,14 +916,14 @@ public:
         InitializeButtons();
         InitializeTools();
         
+        // ===== THÊM MCP TOOL CHO AHT20 =====
+        InitializeAHT20Mcp();
+        InitializeSensorMcp();
+        
         audio_codec_ = GetAudioCodec();
         if (audio_codec_) {
             audio_codec_->SetOutputVolume(current_volume_);
         }
-    }
-
-    bool ReadMotionDetected() {
-        return gpio_get_level(PIR_MOTION_SENSOR_PIN) == 1;
     }
 
 #if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
@@ -768,13 +1008,8 @@ public:
 
 // ===== SENSOR CONTROLLER =====
 SensorController::SensorController(WkEsp32s3Dev* board) {
-    auto& mcp = McpServer::GetInstance();
-
-    mcp.AddTool("self.sensor.motion_detected", "Kiểm tra chuyển động",
-        PropertyList(),
-        [board](const PropertyList& p) -> ReturnValue {
-            return board->ReadMotionDetected() ? "Có chuyển động" : "Không có chuyển động";
-        });
+    // Các MCP tool đã được thêm trong InitializeSensorMcp()
+    // Constructor chỉ để giữ tham chiếu
 }
 
 DECLARE_BOARD(WkEsp32s3Dev);
