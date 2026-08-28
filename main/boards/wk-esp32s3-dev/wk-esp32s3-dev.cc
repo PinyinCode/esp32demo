@@ -151,7 +151,7 @@ private:
             return ret;
         }
 
-        // Tạo device - Cách viết đúng cho ESP-IDF v5.0+
+        // Tạo device
         i2c_master_dev_config_t dev_cfg = {
             .dev_addr_length = I2C_ADDR_BIT_LEN_7,
             .device_address = AHT20_I2C_ADDR,
@@ -308,7 +308,7 @@ private:
     }
 
     // ==========================================
-    //  HIỂN THỊ MẮT ĐỘNG DÙNG API CHUẨN CỦA DISPLAY
+    //  HIỂN THỊ MẮT ĐỘNG
     // ==========================================
     void UpdateDisplayAnimation() {
         if (!display_) return;
@@ -896,7 +896,7 @@ public:
             ESP_LOGW(TAG, "AHT20 initialization failed, sensor will be disabled");
         }
 
-        // ===== THÊM MCP TOOL CHO AHT20 =====
+        // ===== MCP TOOL CHO AHT20 =====
         InitializeAHT20Mcp();
 
         anim_led1_.active = true;
