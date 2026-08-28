@@ -1143,5 +1143,26 @@ config AHT20_I2C_ADDR
     hex "AHT20 I2C Address"
     default 0x38
     depends on AHT20_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+# ===== TOUCH SENSOR CONFIGURATION =====
+config TOUCH_SENSOR_ENABLED
+    bool "Enable Touch Sensor"
+    default n
+    depends on BOARD_TYPE_WK_ESP32S3_DEV
+    help
+        Enable touch sensor support for WK ESP32-S3 Dev Board.
+
+config TOUCH_SENSOR_GPIO
+    int "Touch Sensor GPIO Pin"
+    default 4
+    depends on TOUCH_SENSOR_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    help
+        Specify the GPIO pin connected to the touch sensor.
+
+config TOUCH_SENSOR_THRESHOLD
+    int "Touch Sensor Trigger Threshold"
+    default 500
+    depends on TOUCH_SENSOR_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    help
+        The threshold value below which a touch is detected. Adjust based on hardware testing.
 
 endmenu
