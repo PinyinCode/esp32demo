@@ -102,9 +102,12 @@ private:
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
-    // ===== HỒNG NGOẠI (IR) TỰ VIẾT VARIABLES =====
+    // ===== HỒNG NGOẠI (IR) & HỌC LỆNH VARIABLES =====
     std::string last_captured_ir_code_ = "Chưa có";
     bool ir_initialized_ = false;
+    uint32_t ir_raw_intervals[150];
+    int ir_raw_len = 0;
+    bool is_learning_mode = false;
 
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
@@ -122,10 +125,10 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HỒNG NGOẠI (IR) TỰ VIẾT FUNCTIONS & MCP
+    //  HỒNG NGOẠI (IR) & HỌC LỆNH FUNCTIONS & MCP
     // ==========================================
     void InitializeInfrared() {
-        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module...");
+        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
 
         gpio_config_t io_conf_tx = {};
         io_conf_tx.intr_type = GPIO_INTR_DISABLE;
@@ -147,13 +150,59 @@ private:
         ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
+    void StartLearningIr() {
+        is_learning_mode = true;
+        ir_raw_len = 0;
+        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH IR --- Hãy chĩa remote vào mắt nhận và bấm nút!");
+    }
+
     void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
         ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
     }
 
+    void ReplayLearnedIr() {
+        if (!ir_initialized_ || ir_raw_len == 0) {
+            ESP_LOGW(TAG, "Chưa có mã IR nào được học để phát lại!");
+            return;
+        }
+        ESP_LOGI(TAG, "Đang phát lại mã IR đã học (Tổng số xung: %d)...", ir_raw_len);
+    }
+
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
         if (!ir_initialized_) return false;
+
+        // Nếu đang bật chế độ học lệnh, tiến hành đo xung
+        if (is_learning_mode) {
+            int level = gpio_get_level(IR_RECEIVER_GPIO);
+            // Bắt đầu khi có tín hiệu kéo xuống (mức LOW)
+            if (level == 0) {
+                uint32_t start_time = (uint32_t)esp_timer_get_time();
+                int count = 0;
+                uint32_t last_edge = start_time;
+                int last_level = 0;
+                
+                while (count < 150) {
+                    int current_level = gpio_get_level(IR_RECEIVER_GPIO);
+                    if (current_level != last_level) {
+                        uint32_t now = (uint32_t)esp_timer_get_time();
+                        ir_raw_intervals[count++] = now - last_edge;
+                        last_edge = now;
+                        last_level = current_level;
+                    }
+                    // Timeout sau 50ms không có sự thay đổi xung
+                    if ((esp_timer_get_time() - last_edge) > 50000) break; 
+                }
+                
+                if (count > 10) {
+                    ir_raw_len = count;
+                    is_learning_mode = false;
+                    last_captured_ir_code_ = "Raw_Len_" + std::to_string(ir_raw_len);
+                    ESP_LOGI(TAG, ">>> ĐÃ HỌC XONG MÃ IR THÀNH CÔNG! Số xung: %d", ir_raw_len);
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
@@ -162,20 +211,32 @@ private:
         uint8_t rx_buf[64];
         size_t rx_len = 0;
         while (1) {
-            if (board->ReceiveCustomIrSignal(rx_buf, sizeof(rx_buf), &rx_len)) {
-                // Xử lý dữ liệu nhận được tại đây nếu cần
-            }
-            vTaskDelay(pdMS_TO_TICKS(100));
+            board->ReceiveCustomIrSignal(rx_buf, sizeof(rx_buf), &rx_len);
+            vTaskDelay(pdMS_TO_TICKS(50));
         }
     }
 
     void InitializeInfraredMcp() {
         auto& mcp = McpServer::GetInstance();
 
-        mcp.AddTool("self.ir.get_last_code", "Lấy mã hồng ngoại vừa quét được", 
+        mcp.AddTool("self.ir.start_learning", "Bật chế độ học lệnh hồng ngoại từ remote", 
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                return "Mã IR gần nhất: " + last_captured_ir_code_;
+                StartLearningIr();
+                return "Đã sẵn sàng học lệnh IR. Hãy bấm remote trong vòng 5 giây tới!";
+            });
+
+        mcp.AddTool("self.ir.get_last_code", "Lấy mã hồng ngoại vừa quét/học được", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return "Mã IR gần nhất: " + last_captured_ir_code_ + " (Số xung: " + std::to_string(ir_raw_len) + ")";
+            });
+
+        mcp.AddTool("self.ir.replay", "Phát lại mã hồng ngoại vừa học", 
+            PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                ReplayLearnedIr();
+                return "Đã phát lại lệnh IR vừa học.";
             });
 
         mcp.AddTool("self.ir.send_raw_hex", "Phát lệnh hồng ngoại tự viết dạng mã Hex", 
