@@ -1124,23 +1124,25 @@ menu "TAIJIPAI_S3_CONFIG"
         启动双声道
 endmenu
 # ===== AHT20 TEMPERATURE/HUMIDITY SENSOR =====
-config AHT20_ENABLED
-    bool "Enable AHT20 Temperature/Humidity Sensor"
-    default y
+menu "AHT20 Sensor Configuration"
     depends on BOARD_TYPE_WK_ESP32S3_DEV
 
-config AHT20_SDA_PIN
-    int "AHT20 SDA GPIO"
-    default 17
-    depends on AHT20_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    config AHT20_ENABLED
+        bool "Enable AHT20 Temperature/Humidity Sensor"
+        default y
 
-config AHT20_SCL_PIN
-    int "AHT20 SCL GPIO"
-    default 18
-    depends on AHT20_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    config AHT20_SDA_PIN
+        int "AHT20 SDA GPIO"
+        default 17
+        depends on AHT20_ENABLED
 
-config AHT20_I2C_ADDR
-    hex "AHT20 I2C Address"
-    default 0x38
-    depends on AHT20_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    config AHT20_SCL_PIN
+        int "AHT20 SCL GPIO"
+        default 18
+        depends on AHT20_ENABLED
+
+    config AHT20_I2C_ADDR
+        hex "AHT20 I2C Address"
+        default 0x38
+        depends on AHT20_ENABLED
 endmenu
