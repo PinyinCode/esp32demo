@@ -30,10 +30,16 @@
 #define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y true
 
-// ===== CẢM BIẾN AHT20 =====
-#define AHT20_SDA_PIN   GPIO_NUM_17
-#define AHT20_SCL_PIN   GPIO_NUM_18
-#define AHT20_I2C_ADDR  0x38
+// ===== CẢM BIẾN AHT20 (Đồng bộ Kconfig) =====
+#if CONFIG_AHT20_ENABLED
+    #define AHT20_SDA_PIN   (gpio_num_t)CONFIG_AHT20_SDA_PIN
+    #define AHT20_SCL_PIN   (gpio_num_t)CONFIG_AHT20_SCL_PIN
+    #define AHT20_I2C_ADDR  CONFIG_AHT20_I2C_ADDR
+#else
+    #define AHT20_SDA_PIN   GPIO_NUM_17
+    #define AHT20_SCL_PIN   GPIO_NUM_18
+    #define AHT20_I2C_ADDR  0x38
+#endif
 
 // ===== CẢM BIẾN KHOẢNG CÁCH (I2C - VL53L0X/TOF) =====
 #define ULTRASONIC_SCL_PIN GPIO_NUM_39
@@ -69,9 +75,15 @@
 #else
     #define TOUCH_BUTTON_GPIO   GPIO_NUM_9
 #endif
+
 // ===== HỒNG NGOẠI (IR TRANSMITTER & RECEIVER) =====
-#define IR_RECEIVER_GPIO    GPIO_NUM_38  // Chân nối mắt nhận VS1838B
-#define IR_TRANSMITTER_GPIO GPIO_NUM_47  // Chân nối LED phát hồng ngoại
+#if CONFIG_IR_SENSOR_ENABLED
+    #define IR_RECEIVER_GPIO    (gpio_num_t)CONFIG_IR_RECEIVER_GPIO
+    #define IR_TRANSMITTER_GPIO (gpio_num_t)CONFIG_IR_TRANSMITTER_GPIO
+#else
+    #define IR_RECEIVER_GPIO    GPIO_NUM_38
+    #define IR_TRANSMITTER_GPIO GPIO_NUM_47
+#endif
 
 // ===== KHÔNG DÙNG =====
 #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
