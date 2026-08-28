@@ -30,6 +30,17 @@
 #define DISPLAY_MIRROR_X true
 #define DISPLAY_MIRROR_Y true
 
+// ===== CẢM BIẾN NHIỆT ĐỘ/ĐỘ ẨM AHT20 (I2C) =====
+#ifdef CONFIG_AHT20_ENABLED
+    #define AHT20_SDA_PIN   CONFIG_AHT20_SDA_PIN
+    #define AHT20_SCL_PIN   CONFIG_AHT20_SCL_PIN
+    #define AHT20_I2C_ADDR  CONFIG_AHT20_I2C_ADDR
+#else
+    #define AHT20_SDA_PIN   GPIO_NUM_17
+    #define AHT20_SCL_PIN   GPIO_NUM_18
+    #define AHT20_I2C_ADDR  0x38
+#endif
+
 // ===== CẢM BIẾN KHOẢNG CÁCH (I2C - VL53L0X/TOF) =====
 #define ULTRASONIC_SCL_PIN GPIO_NUM_39
 #define ULTRASONIC_SDA_PIN GPIO_NUM_40
