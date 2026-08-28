@@ -69,6 +69,9 @@
 #else
     #define TOUCH_BUTTON_GPIO   GPIO_NUM_9
 #endif
+// ===== HỒNG NGOẠI (IR TRANSMITTER & RECEIVER) =====
+#define IR_RECEIVER_GPIO    GPIO_NUM_38  // Chân nối mắt nhận VS1838B
+#define IR_TRANSMITTER_GPIO GPIO_NUM_47  // Chân nối LED phát hồng ngoại
 
 // ===== KHÔNG DÙNG =====
 #define VOLUME_UP_BUTTON_GPIO   GPIO_NUM_NC
