@@ -12,7 +12,7 @@
 #include <wifi_station.h>
 #include <esp_log.h>
 #include <esp_timer.h>
-#include <driver/i2c_master.h>
+#include <driver/i2c.h>
 #include <esp_lcd_panel_vendor.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -36,10 +36,10 @@ class WkEsp32s3Dev;
 #define AHT20_CMD_CALIBRATE    0xBE
 #define AHT20_CMD_TRIGGER      0xAC
 #define AHT20_CMD_SOFT_RESET   0xBA
+#define AHT20_I2C_PORT         I2C_NUM_1
 
 typedef struct {
-    i2c_master_bus_handle_t bus;
-    i2c_master_dev_handle_t dev;
+    bool initialized;
     bool calibrated;
     float temperature;
     float humidity;
@@ -107,67 +107,80 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  AHT20 FUNCTIONS
+    //  AHT20 FUNCTIONS (ESP-IDF v4.4 compatible)
     // ==========================================
-    esp_err_t aht20_write_cmd(aht20_handle_t* handle, uint8_t cmd, const uint8_t* data, size_t len) {
-        if (!handle) return ESP_ERR_INVALID_STATE;
-        uint8_t buffer[5] = {cmd};
+    
+    // Hàm ghi I2C
+    esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
+        i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
+        i2c_master_start(cmd_handle);
+        i2c_master_write_byte(cmd_handle, (AHT20_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_write_byte(cmd_handle, cmd, true);
         if (data && len > 0) {
-            memcpy(buffer + 1, data, len);
-            return i2c_master_transmit(handle->dev, buffer, len + 1, -1);
+            i2c_master_write(cmd_handle, data, len, true);
         }
-        return i2c_master_transmit(handle->dev, buffer, 1, -1);
+        i2c_master_stop(cmd_handle);
+        esp_err_t ret = i2c_master_cmd_begin(AHT20_I2C_PORT, cmd_handle, pdMS_TO_TICKS(100));
+        i2c_cmd_link_delete(cmd_handle);
+        return ret;
     }
 
-    esp_err_t aht20_read_data(aht20_handle_t* handle, uint8_t* data, size_t len) {
-        if (!handle) return ESP_ERR_INVALID_STATE;
-        return i2c_master_receive(handle->dev, data, len, -1);
+    // Hàm đọc I2C
+    esp_err_t aht20_read(uint8_t* data, size_t len) {
+        i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
+        i2c_master_start(cmd_handle);
+        i2c_master_write_byte(cmd_handle, (AHT20_I2C_ADDR << 1) | I2C_MASTER_READ, true);
+        if (len > 1) {
+            for (int i = 0; i < len - 1; i++) {
+                i2c_master_read_byte(cmd_handle, data + i, I2C_MASTER_ACK);
+            }
+        }
+        i2c_master_read_byte(cmd_handle, data + len - 1, I2C_MASTER_LAST_NACK);
+        i2c_master_stop(cmd_handle);
+        esp_err_t ret = i2c_master_cmd_begin(AHT20_I2C_PORT, cmd_handle, pdMS_TO_TICKS(100));
+        i2c_cmd_link_delete(cmd_handle);
+        return ret;
     }
 
     esp_err_t InitAHT20() {
 #ifdef CONFIG_AHT20_ENABLED
         ESP_LOGI(TAG, "Initializing AHT20 sensor...");
 
+        // Cấp phát bộ nhớ cho handle
         aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
         if (!aht20_) {
             ESP_LOGE(TAG, "Failed to allocate AHT20 handle");
             return ESP_ERR_NO_MEM;
         }
 
-        // Tạo bus I2C cho AHT20 (dùng port 1)
-        i2c_master_bus_config_t bus_config = {
-            .i2c_port = (i2c_port_t)1,
+        // Cấu hình I2C master
+        i2c_config_t conf = {
+            .mode = I2C_MODE_MASTER,
             .sda_io_num = AHT20_SDA_PIN,
             .scl_io_num = AHT20_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .flags = { .enable_internal_pullup = 1 },
+            .sda_pullup_en = GPIO_PULLUP_ENABLE,
+            .scl_pullup_en = GPIO_PULLUP_ENABLE,
+            .master.clk_speed = 100000,
         };
-        esp_err_t ret = i2c_new_master_bus(&bus_config, &aht20_->bus);
+
+        esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to create I2C bus for AHT20");
+            ESP_LOGE(TAG, "Failed to configure I2C");
             free(aht20_);
             aht20_ = nullptr;
             return ret;
         }
 
-        // Tạo device
-        i2c_master_dev_config_t dev_cfg = {
-            .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-            .device_address = AHT20_I2C_ADDR,
-            .scl_speed_hz = 100000,
-        };
-        ret = i2c_master_bus_add_device(aht20_->bus, &dev_cfg, &aht20_->dev);
+        ret = i2c_driver_install(AHT20_I2C_PORT, conf.mode, 0, 0, 0);
         if (ret != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to add AHT20 device");
-            i2c_del_master_bus(aht20_->bus);
+            ESP_LOGE(TAG, "Failed to install I2C driver");
             free(aht20_);
             aht20_ = nullptr;
             return ret;
         }
 
         // Soft reset
-        ret = aht20_write_cmd(aht20_, AHT20_CMD_SOFT_RESET, NULL, 0);
+        ret = aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to reset AHT20");
             return ret;
@@ -176,25 +189,27 @@ private:
 
         // Kiểm tra trạng thái
         uint8_t status;
-        ret = aht20_read_data(aht20_, &status, 1);
+        ret = aht20_read(&status, 1);
         if (ret != ESP_OK) {
             ESP_LOGE(TAG, "Failed to read AHT20 status");
             return ret;
         }
 
+        // Kiểm tra bit calibrated (bit 3)
         if (status & 0x08) {
             aht20_->calibrated = true;
             ESP_LOGI(TAG, "AHT20 already calibrated");
         } else {
-            uint8_t cmd_data[2] = {0x08, 0x00};
-            ret = aht20_write_cmd(aht20_, AHT20_CMD_CALIBRATE, cmd_data, 2);
+            // Calibrate
+            uint8_t cal_cmd[2] = {0x08, 0x00};
+            ret = aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
             if (ret != ESP_OK) {
                 ESP_LOGE(TAG, "Failed to calibrate AHT20");
                 return ret;
             }
             vTaskDelay(pdMS_TO_TICKS(300));
             
-            ret = aht20_read_data(aht20_, &status, 1);
+            ret = aht20_read(&status, 1);
             if (ret == ESP_OK && (status & 0x08)) {
                 aht20_->calibrated = true;
                 ESP_LOGI(TAG, "AHT20 calibrated successfully");
@@ -204,6 +219,9 @@ private:
             }
         }
 
+        aht20_->initialized = true;
+
+        // Đọc thử lần đầu
         float temp, hum;
         ReadAHT20(&temp, &hum);
         aht20_->last_read_ms = esp_timer_get_time() / 1000;
@@ -217,28 +235,32 @@ private:
     }
 
     esp_err_t ReadAHT20(float* temperature, float* humidity) {
-        if (!aht20_ || !aht20_->calibrated) {
+        if (!aht20_ || !aht20_->calibrated || !aht20_->initialized) {
             return ESP_ERR_INVALID_STATE;
         }
 
-        uint8_t cmd_data[3] = {0x33, 0x00, 0x00};
-        esp_err_t ret = aht20_write_cmd(aht20_, AHT20_CMD_TRIGGER, cmd_data, 3);
+        // Trigger measurement
+        uint8_t trigger_cmd[3] = {0x33, 0x00, 0x00};
+        esp_err_t ret = aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3);
         if (ret != ESP_OK) return ret;
 
         vTaskDelay(pdMS_TO_TICKS(80));
 
+        // Đọc dữ liệu (6 bytes)
         uint8_t data[6];
-        ret = aht20_read_data(aht20_, data, 6);
+        ret = aht20_read(data, 6);
         if (ret != ESP_OK) return ret;
 
+        // Kiểm tra trạng thái busy
         if (data[0] & 0x80) {
             return ESP_ERR_INVALID_STATE;
         }
 
+        // Parse dữ liệu theo datasheet AHT20
         uint32_t raw_humi = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | ((data[3] & 0xF0) >> 4);
         uint32_t raw_temp = ((uint32_t)(data[3] & 0x0F) << 16) | ((uint32_t)data[4] << 8) | data[5];
 
-        *humidity = (float)raw_humi * 100.0f / 1048576.0f;
+        *humidity = (float)raw_humi * 100.0f / 1048576.0f;  // 2^20 = 1048576
         *temperature = (float)raw_temp * 200.0f / 1048576.0f - 50.0f;
 
         aht20_->temperature = *temperature;
@@ -249,7 +271,7 @@ private:
     }
 
     void UpdateSensorData() {
-        if (!aht20_) return;
+        if (!aht20_ || !aht20_->initialized) return;
         uint32_t now = esp_timer_get_time() / 1000;
         if (now - aht20_->last_read_ms < SENSOR_READ_INTERVAL_MS) {
             return;
@@ -267,7 +289,7 @@ private:
         mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ hiện tại", 
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                if (aht20_ && aht20_->calibrated) {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
                     if (ReadAHT20(&temp, &hum) == ESP_OK) {
                         char buffer[32];
@@ -281,7 +303,7 @@ private:
         mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm hiện tại", 
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                if (aht20_ && aht20_->calibrated) {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
                     if (ReadAHT20(&temp, &hum) == ESP_OK) {
                         char buffer[32];
@@ -295,7 +317,7 @@ private:
         mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", 
             PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                if (aht20_ && aht20_->calibrated) {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
                     if (ReadAHT20(&temp, &hum) == ESP_OK) {
                         char buffer[64];
