@@ -142,7 +142,7 @@ private:
         return ret;
     }
 
-    esp_err_t InitAHT20() {
+        esp_err_t InitAHT20() {
 #ifdef CONFIG_AHT20_ENABLED
         ESP_LOGI(TAG, "Initializing AHT20 sensor...");
 
@@ -152,14 +152,13 @@ private:
             return ESP_ERR_NO_MEM;
         }
 
-        i2c_config_t conf = {
-            .mode = I2C_MODE_MASTER,
-            .sda_io_num = AHT20_SDA_PIN,
-            .scl_io_num = AHT20_SCL_PIN,
-            .sda_pullup_en = GPIO_PULLUP_ENABLE,
-            .scl_pullup_en = GPIO_PULLUP_ENABLE,
-            .master.clk_speed = 100000,
-        };
+        i2c_config_t conf = {};
+        conf.mode = I2C_MODE_MASTER;
+        conf.sda_io_num = AHT20_SDA_PIN;
+        conf.scl_io_num = AHT20_SCL_PIN;
+        conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+        conf.master.clk_speed = 100000;
 
         esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
         if (ret != ESP_OK) {
@@ -226,6 +225,7 @@ private:
         return ESP_ERR_NOT_SUPPORTED;
 #endif
     }
+
 
     esp_err_t ReadAHT20(float* temperature, float* humidity) {
         if (!aht20_ || !aht20_->calibrated || !aht20_->initialized) {
