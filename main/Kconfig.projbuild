@@ -1164,5 +1164,26 @@ config TOUCH_SENSOR_THRESHOLD
     depends on TOUCH_SENSOR_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
     help
         The threshold value below which a touch is detected. Adjust based on hardware testing.
+# ===== INFRARED (IR) CONFIGURATION =====
+config IR_SENSOR_ENABLED
+    bool "Enable Infrared (IR) Control"
+    default y
+    depends on BOARD_TYPE_WK_ESP32S3_DEV
+    help
+        Bật/tắt tính năng thu phát hồng ngoại (IR Receiver & Transmitter).
+
+config IR_RECEIVER_GPIO
+    int "IR Receiver GPIO Pin"
+    default 38
+    depends on IR_SENSOR_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    help
+        Chân GPIO kết nối với mắt nhận hồng ngoại (ví dụ: VS1838B).
+
+config IR_TRANSMITTER_GPIO
+    int "IR Transmitter GPIO Pin"
+    default 47
+    depends on IR_SENSOR_ENABLED && BOARD_TYPE_WK_ESP32S3_DEV
+    help
+        Chân GPIO kết nối với LED phát hồng ngoại.
 
 endmenu
