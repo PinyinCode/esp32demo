@@ -29,6 +29,8 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
+#include <ctime>   // Thêm để check thời gian thực
+#include "license_config.h" // Nhúng file cấu hình hạn sử dụng mã hóa
 
 #define TAG "WkEsp32s3Dev"
 
@@ -123,6 +125,31 @@ private:
     friend class SensorController;
 
     // ==========================================
+    //  KIỂM TRA HẠN SỬ DỤNG FIRMWARE (LICENSE)
+    // ==========================================
+    bool CheckLicenseExpiration() {
+        int64_t expiration_timestamp = GetEncryptedExpirationTimestamp();
+        time_t now;
+        time(&now);
+        
+        // Nếu bo mạch chưa đồng bộ thời gian (now còn nhỏ, ví dụ năm 1970), cho phép chạy tạm
+        if (now < 1704067200ULL) { // Nhỏ hơn ngày 01/01/2024
+            ESP_LOGW(TAG, "Chưa đồng bộ được thời gian mạng, bỏ qua kiểm tra license tạm thời.");
+            return true; 
+        }
+
+        if (now > expiration_timestamp) {
+            ESP_LOGE(TAG, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+            ESP_LOGE(TAG, "! FIRMWARE ĐÃ HẾT HẠN SỬ DỤNG! VUI LÒNG GIA HẠN LICENSE !");
+            ESP_LOGE(TAG, "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+            return false; // Hết hạn
+        }
+        
+        ESP_LOGI(TAG, "License hợp lệ. Hạn sử dụng đến mốc Epoch: %lld", (long long)expiration_timestamp);
+        return true;
+    }
+
+    // ==========================================
     //  HỒNG NGOẠI (IR) & HỌC LỆNH (NVS STORAGE)
     // ==========================================
     std::string sanitizeKey(const std::string& input) {
@@ -214,16 +241,27 @@ private:
         ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO: %s --- Hãy bấm remote!", targetName.c_str());
     }
 
+    // Đã bổ sung nội dung hàm truyền tín hiệu IR cơ bản qua chân GPIO TX
     void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
         ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
+        // Duyệt qua mảng thời gian xung và giả lập bật/tắt chân phát IR
+        const uint32_t* intervals = reinterpret_s_cast<const uint32_t*>(data);
+        size_t count = len / sizeof(uint32_t);
+        bool pulse = true;
+        for (size_t i = 0; i < count; ++i) {
+            gpio_set_level((gpio_num_t)IR_TRANSMITTER_GPIO, pulse ? 1 : 0);
+            esp_rom_delay_us(intervals[i]);
+            pulse = !pulse;
+        }
+        gpio_set_level((gpio_num_t)IR_TRANSMITTER_GPIO, 0);
     }
 
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
         if (!ir_initialized_) return false;
 
         if (is_learning_mode) {
-            int level = gpio_get_level(IR_RECEIVER_GPIO);
+            int level = gpio_get_level((gpio_num_t)IR_RECEIVER_GPIO);
             if (level == 0) {
                 uint32_t start_time = (uint32_t)esp_timer_get_time();
                 int count = 0;
@@ -231,7 +269,7 @@ private:
                 int last_level = 0;
                 
                 while (count < 150) {
-                    int current_level = gpio_get_level(IR_RECEIVER_GPIO);
+                    int current_level = gpio_get_level((gpio_num_t)IR_RECEIVER_GPIO);
                     if (current_level != last_level) {
                         uint32_t now = (uint32_t)esp_timer_get_time();
                         ir_raw_intervals[count++] = now - last_edge;
@@ -277,7 +315,7 @@ private:
             });
 
         mcp.AddTool("self.fan.control", "Điều khiển quạt nhiều số hoặc tắt", 
-            PropertyList({Property("action", kPropertyTypeString, "so_1")}), // so_1, so_2, so_3, tat
+            PropertyList({Property("action", kPropertyTypeString, "so_1")}),
             [this](const PropertyList& p) -> ReturnValue {
                 std::string action = p["action"].value<std::string>();
                 std::string key = "fan_" + action;
@@ -286,7 +324,7 @@ private:
             });
 
         mcp.AddTool("self.tv.control", "Bật tắt hoặc chỉnh âm lượng TV", 
-            PropertyList({Property("command", kPropertyTypeString, "nguon")}), // nguon, tang_am, giam_am
+            PropertyList({Property("command", kPropertyTypeString, "nguon")}),
             [this](const PropertyList& p) -> ReturnValue {
                 std::string cmd = p["command"].value<std::string>();
                 std::string key = "tv_" + cmd;
@@ -651,13 +689,13 @@ private:
         };
         ledc_timer_config(&timer);
         
-        ledc_channel_config_t ch1 = {.gpio_num = DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch1 = {.gpio_num = (gpio_num_t)DRV8833_IN1, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_0, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch1);
-        ledc_channel_config_t ch2 = {.gpio_num = DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch2 = {.gpio_num = (gpio_num_t)DRV8833_IN2, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_1, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch2);
-        ledc_channel_config_t ch3 = {.gpio_num = DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch3 = {.gpio_num = (gpio_num_t)DRV8833_IN3, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_2, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch3);
-        ledc_channel_config_t ch4 = {.gpio_num = DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
+        ledc_channel_config_t ch4 = {.gpio_num = (gpio_num_t)DRV8833_IN4, .speed_mode = LEDC_LOW_SPEED_MODE, .channel = LEDC_CHANNEL_3, .timer_sel = LEDC_TIMER_0, .duty = 0, .hpoint = 0};
         ledc_channel_config(&ch4);
     }
     
@@ -739,8 +777,8 @@ private:
             .intr_type = GPIO_INTR_DISABLE,
         };
         gpio_config(&io_conf);
-        gpio_set_level(LED_1, 0);
-        gpio_set_level(LED_2, 0);
+        gpio_set_level((gpio_num_t)LED_1, 0);
+        gpio_set_level((gpio_num_t)LED_2, 0);
     }
 
     void InitializeAdc() {
@@ -789,13 +827,13 @@ private:
         mcp.AddTool("self.led.on", "Bật LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
-                gpio_set_level(LED_1, 1); gpio_set_level(LED_2, 1);
+                gpio_set_level((gpio_num_t)LED_1, 1); gpio_set_level((gpio_num_t)LED_2, 1);
                 return "LED bật";
             });
         mcp.AddTool("self.led.off", "Tắt LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
-                gpio_set_level(LED_1, 0); gpio_set_level(LED_2, 0);
+                gpio_set_level((gpio_num_t)LED_1, 0); gpio_set_level((gpio_num_t)LED_2, 0);
                 return "LED tắt";
             });
     }
@@ -883,6 +921,14 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
+        // Kiểm tra hạn sử dụng ngay khi khởi động bo mạch
+        if (!CheckLicenseExpiration()) {
+            ESP_LOGE(TAG, "Thiết bị tạm dừng hoạt động do hết hạn bản quyền.");
+            while (true) {
+                vTaskDelay(pdMS_TO_TICKS(1000)); // Treo hệ thống nếu hết hạn
+            }
+        }
+
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
         InitializeMotorMcp();
@@ -943,7 +989,7 @@ public:
     void InitializeTools() {}
 
     virtual Led* GetLed() override {
-        static SingleLed led(LED_1);
+        static SingleLed led((gpio_num_t)LED_1);
         return &led;
     }
 
