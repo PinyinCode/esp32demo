@@ -158,7 +158,7 @@ private:
         conf.scl_io_num = AHT20_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-        conf.clk_speed_hz = 100000;
+        conf.clk_speed = 100000;
 
         esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
         if (ret != ESP_OK) {
