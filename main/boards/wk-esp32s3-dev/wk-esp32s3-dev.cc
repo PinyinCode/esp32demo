@@ -148,7 +148,7 @@ private:
             err = nvs_set_blob(nvs_handle, data_key.c_str(), data, sizeof(uint32_t) * len);
             if (err == ESP_OK) {
                 nvs_commit(nvs_handle);
-                ESP_LOGI(TAG, ">>> ĐÃ LƯU THÀNH CÔNG mã IR cho thiết bị [%s] (Số xung: %d)", name.c_str(), len);
+                ESP_LOGI(TAG, ">>> ĐÃ LƯU/GHI ĐÈ THÀNH CÔNG mã IR cho thiết bị [%s] (Số xung: %d)", name.c_str(), len);
             }
         }
         nvs_close(nvs_handle);
@@ -272,7 +272,7 @@ private:
 
                 SaveIrToNvs(current_learning_device_, new_sig.intervals, new_sig.len);
                 
-                ESP_LOGI(TAG, ">>> ĐÃ HỌC VÀ LƯU XONG MÃ CHO [%s]! Số xung: %d", current_learning_device_.c_str(), temp_learning_len);
+                ESP_LOGI(TAG, ">>> ĐÃ HỌC VÀ LƯU/GHI ĐÈ XONG MÃ CHO [%s]! Số xung: %d", current_learning_device_.c_str(), temp_learning_len);
                 current_learning_device_ = "";
                 return true;
             }
@@ -320,6 +320,34 @@ private:
                     list += "[" + pair.first + " (" + std::to_string(pair.second.len) + " xung)] ";
                 }
                 return list;
+            });
+
+        mcp.AddTool("self.ir.delete", "Xóa một thiết bị IR đã lưu khỏi bộ nhớ", 
+            PropertyList({
+                Property("name", kPropertyTypeString, "fan_kitchen", "Tên thiết bị cần xóa")
+            }),
+            [this](const PropertyList& p) -> ReturnValue {
+                std::string dev_name = p["name"].value<std::string>();
+                
+                if (ir_database_.find(dev_name) != ir_database_.end()) {
+                    ir_database_.erase(dev_name);
+                } else {
+                    return "Không tìm thấy thiết bị [" + dev_name + "] trong bộ nhớ.";
+                }
+
+                nvs_handle_t nvs_handle;
+                esp_err_t err = nvs_open("ir_storage", NVS_READWRITE, &nvs_handle);
+                if (err == ESP_OK) {
+                    std::string len_key = dev_name + "_len";
+                    std::string data_key = dev_name + "_dat";
+                    
+                    nvs_erase_key(nvs_handle, len_key.c_str());
+                    nvs_erase_key(nvs_handle, data_key.c_str());
+                    nvs_commit(nvs_handle);
+                    nvs_close(nvs_handle);
+                }
+
+                return "Đã xóa thành công thiết bị [" + dev_name + "] khỏi hệ thống.";
             });
     }
 
