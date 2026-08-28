@@ -77,9 +77,6 @@ class WkEsp32s3Dev : public WifiBoard {
 private:
     Button boot_button_;
     Display* display_ = nullptr;
-    i2c_master_bus_handle_t display_i2c_bus_;
-    esp_lcd_panel_io_handle_t panel_io_ = nullptr;
-    esp_lcd_panel_handle_t panel_ = nullptr;
     Button volume_up_button_;
     Button volume_down_button_;
     SensorController* sensor_controller_ = nullptr;
@@ -107,10 +104,9 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  AHT20 FUNCTIONS (ESP-IDF v4.4 compatible)
+    //  AHT20 FUNCTIONS (ESP-IDF v4.4)
     // ==========================================
     
-    // Hàm ghi I2C
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
         i2c_master_start(cmd_handle);
@@ -125,7 +121,6 @@ private:
         return ret;
     }
 
-    // Hàm đọc I2C
     esp_err_t aht20_read(uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
         i2c_master_start(cmd_handle);
@@ -146,14 +141,13 @@ private:
 #ifdef CONFIG_AHT20_ENABLED
         ESP_LOGI(TAG, "Initializing AHT20 sensor...");
 
-        // Cấp phát bộ nhớ cho handle
         aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
         if (!aht20_) {
             ESP_LOGE(TAG, "Failed to allocate AHT20 handle");
             return ESP_ERR_NO_MEM;
         }
 
-        // Cấu hình I2C master
+        // Cấu hình I2C master cho ESP-IDF v4.4
         i2c_config_t conf = {
             .mode = I2C_MODE_MASTER,
             .sda_io_num = AHT20_SDA_PIN,
@@ -195,12 +189,10 @@ private:
             return ret;
         }
 
-        // Kiểm tra bit calibrated (bit 3)
         if (status & 0x08) {
             aht20_->calibrated = true;
             ESP_LOGI(TAG, "AHT20 already calibrated");
         } else {
-            // Calibrate
             uint8_t cal_cmd[2] = {0x08, 0x00};
             ret = aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
             if (ret != ESP_OK) {
@@ -221,7 +213,6 @@ private:
 
         aht20_->initialized = true;
 
-        // Đọc thử lần đầu
         float temp, hum;
         ReadAHT20(&temp, &hum);
         aht20_->last_read_ms = esp_timer_get_time() / 1000;
@@ -239,28 +230,24 @@ private:
             return ESP_ERR_INVALID_STATE;
         }
 
-        // Trigger measurement
         uint8_t trigger_cmd[3] = {0x33, 0x00, 0x00};
         esp_err_t ret = aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3);
         if (ret != ESP_OK) return ret;
 
         vTaskDelay(pdMS_TO_TICKS(80));
 
-        // Đọc dữ liệu (6 bytes)
         uint8_t data[6];
         ret = aht20_read(data, 6);
         if (ret != ESP_OK) return ret;
 
-        // Kiểm tra trạng thái busy
         if (data[0] & 0x80) {
             return ESP_ERR_INVALID_STATE;
         }
 
-        // Parse dữ liệu theo datasheet AHT20
         uint32_t raw_humi = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | ((data[3] & 0xF0) >> 4);
         uint32_t raw_temp = ((uint32_t)(data[3] & 0x0F) << 16) | ((uint32_t)data[4] << 8) | data[5];
 
-        *humidity = (float)raw_humi * 100.0f / 1048576.0f;  // 2^20 = 1048576
+        *humidity = (float)raw_humi * 100.0f / 1048576.0f;
         *temperature = (float)raw_temp * 200.0f / 1048576.0f - 50.0f;
 
         aht20_->temperature = *temperature;
@@ -624,7 +611,6 @@ private:
         ApplyLedEffect(LED_1, anim_led1_);
         ApplyLedEffect(LED_2, anim_led2_);
         
-        // Cập nhật dữ liệu cảm biến
         UpdateSensorData();
     }
 
@@ -892,6 +878,51 @@ private:
             });
     }
 
+    // ===== DISPLAY =====
+    void InitDisplay() {
+#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
+        // OLED I2C configuration for ESP-IDF v4.4
+        i2c_config_t conf = {
+            .mode = I2C_MODE_MASTER,
+            .sda_io_num = DISPLAY_SDA_PIN,
+            .scl_io_num = DISPLAY_SCL_PIN,
+            .sda_pullup_en = GPIO_PULLUP_ENABLE,
+            .scl_pullup_en = GPIO_PULLUP_ENABLE,
+            .master.clk_speed = 400000,
+        };
+        
+        ESP_ERROR_CHECK(i2c_param_config(I2C_NUM_0, &conf));
+        ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM_0, conf.mode, 0, 0, 0));
+        
+        // LCD panel I2C config
+        esp_lcd_panel_io_i2c_config_t io_config = {};
+        io_config.dev_addr = 0x3C;
+        io_config.scl_speed_hz = 400 * 1000;
+        io_config.control_phase_bytes = 1;
+        io_config.dc_bit_offset = 6;
+        io_config.lcd_cmd_bits = 8;
+        io_config.lcd_param_bits = 8;
+
+        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(display_i2c_bus_, &io_config, &panel_io_));
+
+        esp_lcd_panel_dev_config_t panel_config = {};
+        panel_config.reset_gpio_num = GPIO_NUM_NC;
+        panel_config.bits_per_pixel = 1;
+
+        esp_lcd_panel_ssd1306_config_t ssd1306_config = {
+            .height = static_cast<uint8_t>(DISPLAY_HEIGHT),
+        };
+        panel_config.vendor_config = &ssd1306_config;
+
+        ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_));
+        ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
+        ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));
+        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
+
+        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
+#endif
+    }
+
 public:
     WkEsp32s3Dev() :
         boot_button_(BOOT_BUTTON_GPIO),
@@ -925,11 +956,8 @@ public:
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
 
-#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-        InitializeDisplayI2c();
-        InitializeSsd1306Display();
+        InitDisplay();
         ShowEmotionDisplay("neutral");
-#endif
 
         InitializeButtons();
         InitializeTools();
@@ -941,48 +969,6 @@ public:
             audio_codec_->SetOutputVolume(current_volume_);
         }
     }
-
-#if CONFIG_WK_ESP32S3_DEV_DISPLAY_OLED
-    void InitializeDisplayI2c() {
-        i2c_master_bus_config_t bus_config = {
-            .i2c_port = (i2c_port_t)0,
-            .sda_io_num = DISPLAY_SDA_PIN,
-            .scl_io_num = DISPLAY_SCL_PIN,
-            .clk_source = I2C_CLK_SRC_DEFAULT,
-            .glitch_ignore_cnt = 7,
-            .flags = {.enable_internal_pullup = 1},
-        };
-        ESP_ERROR_CHECK(i2c_new_master_bus(&bus_config, &display_i2c_bus_));
-    }
-
-    void InitializeSsd1306Display() {
-        esp_lcd_panel_io_i2c_config_t io_config = {};
-        io_config.dev_addr = 0x3C;
-        io_config.scl_speed_hz = 400 * 1000;
-        io_config.control_phase_bytes = 1;
-        io_config.dc_bit_offset = 6;
-        io_config.lcd_cmd_bits = 8;
-        io_config.lcd_param_bits = 8;
-
-        ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(display_i2c_bus_, &io_config, &panel_io_));
-
-        esp_lcd_panel_dev_config_t panel_config = {};
-        panel_config.reset_gpio_num = GPIO_NUM_NC;
-        panel_config.bits_per_pixel = 1;
-
-        esp_lcd_panel_ssd1306_config_t ssd1306_config = {
-            .height = static_cast<uint8_t>(DISPLAY_HEIGHT),
-        };
-        panel_config.vendor_config = &ssd1306_config;
-
-        ESP_ERROR_CHECK(esp_lcd_new_panel_ssd1306(panel_io_, &panel_config, &panel_));
-        ESP_ERROR_CHECK(esp_lcd_panel_reset(panel_));
-        ESP_ERROR_CHECK(esp_lcd_panel_init(panel_));
-        ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel_, true));
-
-        display_ = new OledDisplay(panel_io_, panel_, DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y);
-    }
-#endif
 
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
@@ -1025,7 +1011,6 @@ public:
 // ===== SENSOR CONTROLLER =====
 SensorController::SensorController(WkEsp32s3Dev* board) {
     // Các MCP tool đã được thêm trong InitializeSensorMcp()
-    // Constructor chỉ để giữ tham chiếu
 }
 
 DECLARE_BOARD(WkEsp32s3Dev);
