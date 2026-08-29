@@ -129,8 +129,8 @@ private:
     //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (GITHUB & TELEGRAM)
     // ==========================================
     const char* github_url_ = "https://raw.githubusercontent.com/PinyinCode/license/refs/heads/main/licenses.json";
-    const char* bot_token_ = "YOUR_TELEGRAM_BOT_TOKEN";
-    const char* chat_id_ = "YOUR_TELEGRAM_CHAT_ID";
+    const char* bot_token_ = "8380211760:AAFzh9FBQ4BTvmJO_xOp4gUyg9MeKx-VN0Y";
+    const char* chat_id_ = "-5499297763";
     Preferences preferences_;
 
     String getMacAddress() {
