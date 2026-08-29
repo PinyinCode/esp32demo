@@ -29,9 +29,11 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
-#include <HTTPClient.h>
+#include <esp_http_client.h>
+#include <esp_wifi.h>
 #include <cJSON.h>
 #include <time.h>
+#include <Preferences.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -126,35 +128,57 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (GITHUB & TELEGRAM)
+    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (ESP-IDF HTTP)
     // ==========================================
     const char* github_url_ = "https://raw.githubusercontent.com/PinyinCode/license/refs/heads/main/licenses.json";
-    const char* bot_token_ = "8380211760:AAFzh9FBQ4BTvmJO_xOp4gUyg9MeKx-VN0Y";
-    const char* chat_id_ = "-5499297763";
+    const char* bot_token_ = "YOUR_TELEGRAM_BOT_TOKEN";
+    const char* chat_id_ = "YOUR_TELEGRAM_CHAT_ID";
     Preferences preferences_;
 
     String getMacAddress() {
-        return WiFi.macAddress();
+        uint8_t base_mac[6];
+        esp_read_mac(base_mac, ESP_MAC_WIFI_STA);
+        char macStr[18];
+        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 base_mac[0], base_mac[1], base_mac[2], base_mac[3], base_mac[4], base_mac[5]);
+        return String(macStr);
+    }
+
+    std::string urlEncode(const std::string& str) {
+        std::string strTemp = "";
+        size_t length = str.length();
+        for (size_t i = 0; i < length; i++) {
+            if (isalnum((unsigned char)str[i]) || str[i] == '-' || str[i] == '_' || str[i] == '.' || str[i] == '~')
+                strTemp += str[i];
+            else if (str[i] == ' ')
+                strTemp += "%20";
+            else {
+                char buf[4];
+                sprintf(buf, "%%%02X", (unsigned char)str[i]);
+                strTemp += buf;
+            }
+        }
+        return strTemp;
     }
 
     void sendTelegramAlert(const String& message) {
         if (WiFi.status() != WL_CONNECTED) return;
         
-        HTTPClient http;
-        String url = "https://api.telegram.org/bot" + String(bot_token_) + 
-                     "/sendMessage?chat_id=" + String(chat_id_) + 
-                     "&text=" + urlEncode(message);
-        
-        http.begin(url);
-        http.GET();
-        http.end();
-    }
+        std::string url = "https://api.telegram.org/bot" + std::string(bot_token_) + 
+                          "/sendMessage?chat_id=" + std::string(chat_id_) + 
+                          "&text=" + urlEncode(message.c_str());
 
-    String urlEncode(String str) {
-        str.replace(" ", "%20");
-        str.replace(":", "%3A");
-        str.replace("\n", "%0A");
-        return str;
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.method = HTTP_METHOD_GET;
+        config.is_secure = true;
+        config.skip_cert_common_name_check = true;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        if (client) {
+            esp_http_client_perform(client);
+            esp_http_client_cleanup(client);
+        }
     }
 
     bool isDateExpired(const String& expire_date_str) {
@@ -177,6 +201,20 @@ private:
         return now > expire_time;
     }
 
+    static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
+        switch(evt->event_id) {
+            case HTTP_EVENT_ON_DATA:
+                if (evt->user_data) {
+                    std::string* output = (std::string*)evt->user_data;
+                    output->append((char*)evt->data, evt->data_len);
+                }
+                break;
+            default:
+                break;
+        }
+        return ESP_OK;
+    }
+
     bool verifyLicense() {
         String current_mac = getMacAddress();
         
@@ -194,19 +232,22 @@ private:
         }
 
         if (WiFi.status() != WL_CONNECTED) {
-            if (now > 1704067200 && now < trial_expire_time) {
-                return true;
-            }
-            return true;
+            return (now > 1704067200 && now < trial_expire_time);
         }
 
-        HTTPClient http;
-        http.begin(github_url_);
-        int httpResponseCode = http.GET();
+        std::string payload = "";
+        esp_http_client_config_t config = {};
+        config.url = github_url_;
+        config.event_handler = _http_event_handler;
+        config.user_data = &payload;
+        config.is_secure = true;
+        config.skip_cert_common_name_check = true;
 
-        if (httpResponseCode > 0) {
-            String payload = http.getString();
-            http.end();
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+
+        if (err == ESP_OK && esp_http_client_get_status_code(client) == 200) {
+            esp_http_client_cleanup(client);
 
             cJSON* root = cJSON_Parse(payload.c_str());
             if (root == nullptr) {
@@ -249,7 +290,7 @@ private:
                 return is_valid_license;
             }
         } else {
-            http.end();
+            esp_http_client_cleanup(client);
         }
 
         if (now > 1704067200 && now < trial_expire_time) {
@@ -263,7 +304,7 @@ private:
     static void DailyLicenseCheckTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (true) {
-            vTaskDelay(pdMS_TO_TICKS(86400000)); // Kiểm tra lại sau mỗi 24 giờ
+            vTaskDelay(pdMS_TO_TICKS(86400000)); 
             if (!board->verifyLicense()) {
                 ESP_LOGE(TAG, "Bản quyền đã hết hạn! Khóa thiết bị...");
                 while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
@@ -290,15 +331,11 @@ private:
         std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Lỗi mở NVS: %s", esp_err_to_name(err));
-            return false;
-        }
+        if (err != ESP_OK) return false;
 
         err = nvs_set_blob(nvs_handle, key.c_str(), data, length);
         if (err == ESP_OK) {
             err = nvs_commit(nvs_handle);
-            ESP_LOGI(TAG, "Đã lưu thành công mã IR cho khóa: %s", key.c_str());
         }
         nvs_close(nvs_handle);
         return err == ESP_OK;
@@ -308,15 +345,11 @@ private:
         std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Không thể mở NVS để đọc: %s", esp_err_to_name(err));
-            return false;
-        }
+        if (err != ESP_OK) return false;
 
         size_t required_size = 0;
         err = nvs_get_blob(nvs_handle, key.c_str(), NULL, &required_size);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Không tìm thấy mã IR đã lưu cho thiết bị: %s", key.c_str());
             nvs_close(nvs_handle);
             return false;
         }
@@ -324,7 +357,6 @@ private:
         uint8_t* ir_data = new uint8_t[required_size];
         err = nvs_get_blob(nvs_handle, key.c_str(), ir_data, &required_size);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Đang phát lệnh IR từ NVS cho: %s (Kích thước: %d)", key.c_str(), required_size);
             SendCustomIrSignal(ir_data, required_size);
         }
 
@@ -334,38 +366,29 @@ private:
     }
 
     void InitializeInfrared() {
-        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
-
         gpio_config_t io_conf_tx = {};
-        io_conf_tx.intr_type = GPIO_INTR_DISABLE;
         io_conf_tx.mode = GPIO_MODE_OUTPUT;
         io_conf_tx.pin_bit_mask = (1ULL << IR_TRANSMITTER_GPIO);
-        io_conf_tx.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        io_conf_tx.pull_up_en = GPIO_PULLUP_DISABLE;
         gpio_config(&io_conf_tx);
         gpio_set_level(IR_TRANSMITTER_GPIO, 0);
 
         gpio_config_t io_conf_rx = {};
-        io_conf_rx.intr_type = GPIO_INTR_DISABLE;
         io_conf_rx.mode = GPIO_MODE_INPUT;
         io_conf_rx.pin_bit_mask = (1ULL << IR_RECEIVER_GPIO);
         io_conf_rx.pull_up_en = GPIO_PULLUP_ENABLE;
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
-        ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
     void StartLearningIr(const std::string& targetName) {
         is_learning_mode = true;
         active_learning_device_ = targetName;
         ir_raw_len = 0;
-        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO: %s --- Hãy bấm remote!", targetName.c_str());
     }
 
     void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
-        ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
     }
 
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
@@ -395,7 +418,6 @@ private:
                     is_learning_mode = false;
                     saveIRCodeToNVS(active_learning_device_, (uint8_t*)ir_raw_intervals, ir_raw_len * sizeof(uint32_t));
                     last_captured_ir_code_ = active_learning_device_ + " (Xung: " + std::to_string(ir_raw_len) + ")";
-                    ESP_LOGI(TAG, ">>> HỌC VÀ LƯU XONG CHO: %s", active_learning_device_.c_str());
                     active_learning_device_ = "";
                     return true;
                 }
@@ -576,19 +598,6 @@ private:
                 }
                 return std::string("Không thể đọc độ ẩm");
             });
-
-        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
-                    float temp, hum;
-                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
-                        char buffer[64];
-                        snprintf(buffer, sizeof(buffer), "Nhiệt độ: %.1f°C, Độ ẩm: %.1f%%", temp, hum);
-                        return std::string(buffer);
-                    }
-                }
-                return std::string("Không thể đọc cảm biến");
-            });
     }
 
     // ==========================================
@@ -643,45 +652,6 @@ private:
         return (int)((sin(phase) + 1) / 2 * 255);
     }
 
-    int HeartbeatEffect(uint32_t time_ms) {
-        uint32_t cycle = time_ms % 1000;
-        if (cycle < 100) return 255;
-        else if (cycle < 200) return 50;
-        else if (cycle < 300) return 255;
-        else if (cycle < 400) return 50;
-        else return 0;
-    }
-
-    int WaveEffect(uint32_t time_ms, int speed, int led_index) {
-        float period = 1500.0f / speed;
-        float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
-        float phase_offset = led_index == 0 ? 0 : 3.14159f;
-        return (int)((sin(phase + phase_offset) + 1) / 2 * 255);
-    }
-
-    int CometEffect(uint32_t time_ms, int speed, int led_index) {
-        int cycle_time = 3000 / speed;
-        int pos = (time_ms % cycle_time) * 255 / cycle_time;
-        int brightness = 0;
-        if (pos > 200) brightness = 255;
-        else if (pos > 150) brightness = (pos - 150) * 5;
-        return led_index == 0 ? brightness : brightness / 2;
-    }
-
-    int TwinkleEffect(uint32_t time_ms, int speed, int led_index) {
-        uint32_t seed = (time_ms / (200 / speed)) + led_index * 1000;
-        uint32_t random = (seed * 1103515245 + 12345) & 0x7fffffff;
-        return (random % 256) > 200 ? 255 : (random % 256) > 100 ? 128 : 0;
-    }
-
-    int PulseEffect(uint32_t time_ms, int speed, int led_index) {
-        int pulse_width = 200 / speed;
-        uint32_t cycle = time_ms % (pulse_width * 4);
-        if (cycle < pulse_width) return (cycle * 255) / pulse_width;
-        else if (cycle < pulse_width * 2) return 255 - ((cycle - pulse_width) * 255 / pulse_width);
-        else return 0;
-    }
-
     void ApplyLedEffect(int led_pin, LedAnimation anim) {
         if (!anim.active) {
             gpio_set_level((gpio_num_t)led_pin, 0);
@@ -693,12 +663,6 @@ private:
             case PATTERN_OFF: brightness = 0; break;
             case PATTERN_BREATH: brightness = BreathEffect(time, anim.speed); break;
             case PATTERN_BLINK_FAST: brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0; break;
-            case PATTERN_BLINK_SLOW: brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0; break;
-            case PATTERN_HEARTBEAT: brightness = HeartbeatEffect(time); break;
-            case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
-            case PATTERN_PULSE: brightness = PulseEffect(time, anim.speed, 0); break;
-            case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
             default: brightness = 0; break;
         }
         gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
@@ -716,24 +680,7 @@ private:
         if (emotion == current_emotion_ && emotion_auto_mode_ == false) return;
         current_emotion_ = emotion;
         emotion_auto_mode_ = false;
-        
         ShowEmotionDisplay(emotion);
-        
-        if (emotion == "happy") {
-            led_auto_mode_ = false;
-            anim_led1_ = {PATTERN_BREATH, 5, 255, 0, true};
-            anim_led2_ = {PATTERN_BREATH, 5, 255, 0, true};
-            SetLedTimeout(5);
-        } else if (emotion == "sad") {
-            led_auto_mode_ = false;
-            anim_led1_ = {PATTERN_BREATH, 1, 255, 0, true};
-            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
-            SetLedTimeout(5);
-        } else if (emotion == "neutral") {
-            led_auto_mode_ = true;
-            led_timeout_ms_ = 0;
-            emotion_auto_mode_ = true;
-        }
     }
 
     void UpdateEmotionByState() {
@@ -761,17 +708,8 @@ private:
         }
         
         if (led_auto_mode_) {
-            auto& app = Application::GetInstance();
-            switch (app.GetDeviceState()) {
-                case kDeviceStateIdle:
-                    anim_led1_.pattern = PATTERN_BREATH; anim_led1_.speed = 3; anim_led1_.active = true;
-                    anim_led2_.pattern = PATTERN_OFF; anim_led2_.active = false;
-                    break;
-                default:
-                    anim_led1_.pattern = PATTERN_BLINK_FAST; anim_led1_.speed = 12; anim_led1_.active = true;
-                    anim_led2_.pattern = PATTERN_BLINK_FAST; anim_led2_.speed = 12; anim_led2_.active = true;
-                    break;
-            }
+            anim_led1_.pattern = PATTERN_BREATH; anim_led1_.speed = 3; anim_led1_.active = true;
+            anim_led2_.pattern = PATTERN_OFF; anim_led2_.active = false;
         }
         ApplyLedEffect(LED_1, anim_led1_);
         ApplyLedEffect(LED_2, anim_led2_);
@@ -900,7 +838,7 @@ private:
     }
 
     // ==========================================
-    //  TẤT CẢ MCP TOOLS ĐẦY ĐỦ (Bao gồm lấy MAC)
+    //  MCP TOOLS
     // ==========================================
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
@@ -1040,11 +978,9 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
-        // 1. Khởi tạo NVS và kiểm tra bản quyền ngay khi khởi động
         preferences_.begin("license", false);
-        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // Đồng bộ giờ VN (UTC+7)
+        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); 
 
-        // Chờ kết nối Wi-Fi ổn định trong giây lát để check bản quyền online
         int wifi_timeout = 0;
         while (WiFi.status() != WL_CONNECTED && wifi_timeout < 20) {
             delay(500);
@@ -1054,10 +990,9 @@ public:
         if (!verifyLicense()) {
             ESP_LOGE(TAG, "=========================================");
             ESP_LOGE(TAG, "THIẾT BỊ BỊ KHÓA BẢN QUYỀN!");
-            ESP_LOGE(TAG, "Vui lòng liên hệ quản trị viên để gia hạn.");
             ESP_LOGE(TAG, "=========================================");
             while (true) {
-                delay(1000); // Dừng hệ thống, không cho chạy tiếp
+                delay(1000); 
             }
         }
 
@@ -1073,7 +1008,7 @@ public:
         InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
-        InitializeMacMcp(); // Thêm công cụ lấy MAC vào MCP server
+        InitializeMacMcp();
 
         InitAHT20();
         InitializeAHT20Mcp();
