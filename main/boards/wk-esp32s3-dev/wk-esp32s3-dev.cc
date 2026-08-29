@@ -94,7 +94,8 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    bool sys_kernel_secured_ = false;
+    // Mặc định là true để thiết bị khởi động mượt mà, sau đó task ngầm sẽ cập nhật lại
+    bool sys_kernel_secured_ = true;
 
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
@@ -135,7 +136,6 @@ private:
     }
 
     void InitSystemKernelSecurity() {
-        sys_kernel_secured_ = false;
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         char mac_str[18];
@@ -154,14 +154,14 @@ private:
         }
         url += std::string(mac_str);
 
-        ESP_LOGI(TAG, "System hardware initialization check...");
+        ESP_LOGI(TAG, "Checking system security license online...");
 
         std::string response_data = "";
         esp_http_client_config_t config = {};
         config.url = url.c_str();
         config.event_handler = _http_event_handler;
         config.user_data = &response_data;
-        config.timeout_ms = 5000;
+        config.timeout_ms = 8000; // Tăng timeout lên 8 giây để chờ server cold-start
 
         esp_http_client_handle_t client = esp_http_client_init(&config);
         esp_err_t err = esp_http_client_perform(client);
@@ -175,19 +175,40 @@ private:
                     if (status && cJSON_IsString(status)) {
                         if (strcmp(status->valuestring, "active") == 0) {
                             sys_kernel_secured_ = true;
-                            ESP_LOGI(TAG, "System check passed.");
+                            ESP_LOGI(TAG, "System license check: PASSED.");
                         } else {
                             sys_kernel_secured_ = false;
-                            ESP_LOGW(TAG, "System check restricted.");
+                            ESP_LOGW(TAG, "System license check: RESTRICTED/INACTIVE.");
                         }
                     }
                     cJSON_Delete(root);
                 }
             }
         } else {
-            sys_kernel_secured_ = true; 
+            // Mất mạng tạm thời vẫn cho qua để tránh kẹt thiết bị offline, 
+            // nhưng nếu server chủ động trả về inactive thì sẽ bị khóa ở dưới.
+            ESP_LOGW(TAG, "License server unreachable, allowing temporary grace period.");
         }
         esp_http_client_cleanup(client);
+    }
+
+    // FreeRTOS Task chạy ngầm kiểm tra bảo mật định kỳ hoặc sau khi khởi động
+    static void SecurityCheckTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        
+        // Đợi 12 giây để Wi-Fi kịp kết nối và server kịp thức dậy (nếu dùng Render)
+        vTaskDelay(pdMS_TO_TICKS(12000));
+
+        board->InitSystemKernelSecurity();
+
+        // Nếu hàm bị can thiệp đổi kết quả thành false hoặc server chặn
+        if (!board->sys_kernel_secured_) {
+            ESP_LOGE(TAG, "FATAL: Security violation or license revoked. Halting system.");
+            vTaskDelay(pdMS_TO_TICKS(1000)); // Chờ log in ra hết
+            abort(); // Làm sập chip cố tình
+        }
+
+        vTaskDelete(NULL); // Xóa task sau khi hoàn thành kiểm tra
     }
 
     std::string sanitizeKey(const std::string& input) {
@@ -935,10 +956,8 @@ public:
 
         InitDisplay();
 
-        InitSystemKernelSecurity();
-        if (!sys_kernel_secured_) {
-            abort();
-        }
+        // Khởi chạy task ngầm kiểm tra license/bảo mật sau khi thiết bị khởi động
+        xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
