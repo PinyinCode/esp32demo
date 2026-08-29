@@ -33,7 +33,6 @@
 #include <esp_wifi.h>
 #include <cJSON.h>
 #include <time.h>
-#include <Preferences.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -90,7 +89,6 @@ private:
     Button touch_button_;
     Display* display_ = nullptr;
     
-    // ===== DISPLAY VARIABLES =====
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     
@@ -101,11 +99,9 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // ===== AHT20 VARIABLES =====
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
-    // ===== HỒNG NGOẠI (IR) & NVS STORAGE VARIABLES =====
     std::string last_captured_ir_code_ = "Chưa có";
     bool ir_initialized_ = false;
     uint32_t ir_raw_intervals[150];
@@ -128,12 +124,11 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (ESP-IDF HTTP)
+    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (ESP-IDF NVS & HTTP)
     // ==========================================
     const char* github_url_ = "https://raw.githubusercontent.com/PinyinCode/license/refs/heads/main/licenses.json";
     const char* bot_token_ = "YOUR_TELEGRAM_BOT_TOKEN";
     const char* chat_id_ = "YOUR_TELEGRAM_CHAT_ID";
-    Preferences preferences_;
 
     String getMacAddress() {
         uint8_t base_mac[6];
@@ -218,21 +213,36 @@ private:
     bool verifyLicense() {
         String current_mac = getMacAddress();
         
-        bool is_trial_activated = preferences_.getBool("trial_active", false);
-        unsigned long trial_expire_time = preferences_.getULong("trial_expire", 0);
+        nvs_handle_t nvs_handle;
+        bool is_trial_activated = false;
+        uint64_t trial_expire_time = 0;
+
+        if (nvs_open("license", NVS_READWRITE, &nvs_handle) == ESP_OK) {
+            uint8_t val = 0;
+            if (nvs_get_u8(nvs_handle, "trial_active", &val) == ESP_OK) {
+                is_trial_activated = (val == 1);
+            }
+            nvs_get_u64(nvs_handle, "trial_expire", &trial_expire_time);
+            nvs_close(nvs_handle);
+        }
+
         time_t now = time(nullptr);
 
         if (!is_trial_activated && now > 1704067200) {
-            trial_expire_time = now + (30L * 24 * 60 * 60);
-            preferences_.putBool("trial_active", true);
-            preferences_.putULong("trial_expire", trial_expire_time);
+            trial_expire_time = (uint64_t)(now + (30L * 24 * 60 * 60));
+            if (nvs_open("license", NVS_READWRITE, &nvs_handle) == ESP_OK) {
+                nvs_set_u8(nvs_handle, "trial_active", 1);
+                nvs_set_u64(nvs_handle, "trial_expire", trial_expire_time);
+                nvs_commit(nvs_handle);
+                nvs_close(nvs_handle);
+            }
             
             String msg = "🚀 THIẾT BỊ MỚI KÍCH HOẠT!\nMAC: " + current_mac + "\nĐã tự động cấp 30 ngày dùng thử.";
             sendTelegramAlert(msg);
         }
 
         if (WiFi.status() != WL_CONNECTED) {
-            return (now > 1704067200 && now < trial_expire_time);
+            return (now > 1704067200 && now < (time_t)trial_expire_time);
         }
 
         std::string payload = "";
@@ -293,7 +303,7 @@ private:
             esp_http_client_cleanup(client);
         }
 
-        if (now > 1704067200 && now < trial_expire_time) {
+        if (now > 1704067200 && now < (time_t)trial_expire_time) {
             return true;
         }
 
@@ -978,7 +988,6 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
-        preferences_.begin("license", false);
         configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); 
 
         int wifi_timeout = 0;
