@@ -1,0 +1,64 @@
+name: Build WK ESP32S3 Dev
+
+on:
+  # push:
+  #   branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build WK ESP32S3 Dev Board
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:v5.5.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Clean cache
+        shell: bash
+        run: |
+          rm -rf build/
+          rm -rf managed_components/
+
+      - name: Debug files
+        shell: bash
+        run: |
+          echo "=== boards ==="
+          ls main/boards/wk-esp32s3-dev/ 2>/dev/null || echo "THIẾU board!"
+          echo "=== sdkconfig ==="
+          ls sdkconfig.defaults* 2>/dev/null
+          echo "=== partitions ==="
+          ls partitions/v2/16m.csv 2>/dev/null || echo "THIẾU partitions!"
+          echo "=== locales ==="
+          ls main/assets/locales/vi-VN/language.json 2>/dev/null || echo "THIẾU language.json!"
+
+      - name: Build firmware
+        shell: bash
+        run: |
+          source $IDF_PATH/export.sh
+          python scripts/build.py wk-esp32s3-dev --name "wk-esp32s3-dev" --language "vi-VN" 2>&1 | tee build.log
+
+      - name: Show error log
+        if: failure()
+        run: |
+          echo "=== build.log ==="
+          tail -200 build.log 2>/dev/null || echo "no build.log"
+          echo "=== STDERR ==="
+          cat build/log/idf_py_stderr_output_* 2>/dev/null | tail -100
+          echo "=== STDOUT ==="
+          cat build/log/idf_py_stdout_output_* 2>/dev/null | tail -100
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: wk-esp32s3-dev-firmware-${{ github.sha }}
+          path: |
+            build/merged-binary.bin
+            build/xiaozhi.bin
+          if-no-files-found: error
