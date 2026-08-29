@@ -138,7 +138,7 @@ private:
     }
 
     // Hàm thực hiện kiểm tra cập nhật OTA từ server Render
-    void CheckAndPerformOta() {
+        void CheckAndPerformOta() {
         std::string url = "https://esp32-428i.onrender.com/api/check-update?mac=" + device_mac_str_;
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
 
@@ -170,7 +170,12 @@ private:
                             ota_config.url = bin_url.c_str();
                             ota_config.timeout_ms = 120000; // 2 phút cho quá trình tải file bin
 
-                            esp_err_t ota_ret = esp_https_ota(&ota_config);
+                            // Bọc cấu hình client vào esp_https_ota_config_t đúng chuẩn ESP-IDF
+                            esp_https_ota_config_t ota_handle_config = {
+                                .http_config = &ota_config,
+                            };
+
+                            esp_err_t ota_ret = esp_https_ota(&ota_handle_config);
                             if (ota_ret == ESP_OK) {
                                 ESP_LOGI(TAG, "OTA Update successful. Rebooting...");
                                 esp_restart();
@@ -206,6 +211,7 @@ private:
         InitSystemKernelSecurityCore();
         CheckAndPerformOta();
     }
+
 
     void InitSystemKernelSecurityCore() {
         std::string url = "https://license-rqbk.onrender.com/api/check-license?mac=" + device_mac_str_;
