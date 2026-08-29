@@ -94,8 +94,9 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // Mặc định là true để thiết bị khởi động mượt mà, sau đó task ngầm sẽ cập nhật lại
     bool sys_kernel_secured_ = true;
+    std::string device_mac_str_ = "00:00:00:00:00:00";
+    std::string license_expiration_ = "Không xác định";
 
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
@@ -140,6 +141,7 @@ private:
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         char mac_str[18];
         snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        device_mac_str_ = std::string(mac_str);
 
         const uint8_t enc_url[] = {
             104, 116, 116, 112, 115, 58, 47, 47, 108, 105, 99, 101, 110, 115, 101, 
@@ -152,7 +154,7 @@ private:
         for (size_t i = 0; i < sizeof(enc_url); i++) {
             url += (char)enc_url[i];
         }
-        url += std::string(mac_str);
+        url += device_mac_str_;
 
         ESP_LOGI(TAG, "Checking system security license online...");
 
@@ -161,7 +163,7 @@ private:
         config.url = url.c_str();
         config.event_handler = _http_event_handler;
         config.user_data = &response_data;
-        config.timeout_ms = 8000; // Tăng timeout lên 8 giây để chờ server cold-start
+        config.timeout_ms = 8000;
 
         esp_http_client_handle_t client = esp_http_client_init(&config);
         esp_err_t err = esp_http_client_perform(client);
@@ -181,34 +183,47 @@ private:
                             ESP_LOGW(TAG, "System license check: RESTRICTED/INACTIVE.");
                         }
                     }
+
+                    cJSON *exp = cJSON_GetObjectItem(root, "expiration");
+                    if (!exp) exp = cJSON_GetObjectItem(root, "expires_at");
+                    if (exp && cJSON_IsString(exp)) {
+                        license_expiration_ = std::string(exp->valuestring);
+                    }
+
                     cJSON_Delete(root);
                 }
             }
         } else {
-            // Mất mạng tạm thời vẫn cho qua để tránh kẹt thiết bị offline, 
-            // nhưng nếu server chủ động trả về inactive thì sẽ bị khóa ở dưới.
             ESP_LOGW(TAG, "License server unreachable, allowing temporary grace period.");
         }
         esp_http_client_cleanup(client);
     }
 
-    // FreeRTOS Task chạy ngầm kiểm tra bảo mật định kỳ hoặc sau khi khởi động
     static void SecurityCheckTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
-        
-        // Đợi 12 giây để Wi-Fi kịp kết nối và server kịp thức dậy (nếu dùng Render)
         vTaskDelay(pdMS_TO_TICKS(12000));
-
         board->InitSystemKernelSecurity();
 
-        // Nếu hàm bị can thiệp đổi kết quả thành false hoặc server chặn
         if (!board->sys_kernel_secured_) {
             ESP_LOGE(TAG, "FATAL: Security violation or license revoked. Halting system.");
-            vTaskDelay(pdMS_TO_TICKS(1000)); // Chờ log in ra hết
-            abort(); // Làm sập chip cố tình
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            abort();
         }
+        vTaskDelete(NULL);
+    }
 
-        vTaskDelete(NULL); // Xóa task sau khi hoàn thành kiểm tra
+    void InitializeSystemInfoMcp() {
+        auto& mcp = McpServer::GetInstance();
+
+        mcp.AddTool("self.system.mac", "Lấy địa chỉ MAC của thiết bị", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return device_mac_str_;
+            });
+
+        mcp.AddTool("self.system.expiration", "Lấy ngày hết hạn bản quyền thiết bị", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return license_expiration_;
+            });
     }
 
     std::string sanitizeKey(const std::string& input) {
@@ -227,14 +242,10 @@ private:
         std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
-        if (err != ESP_OK) {
-            return false;
-        }
+        if (err != ESP_OK) return false;
 
         err = nvs_set_blob(nvs_handle, key.c_str(), data, length);
-        if (err == ESP_OK) {
-            err = nvs_commit(nvs_handle);
-        }
+        if (err == ESP_OK) err = nvs_commit(nvs_handle);
         nvs_close(nvs_handle);
         return err == ESP_OK;
     }
@@ -243,9 +254,7 @@ private:
         std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
-        if (err != ESP_OK) {
-            return false;
-        }
+        if (err != ESP_OK) return false;
 
         size_t required_size = 0;
         err = nvs_get_blob(nvs_handle, key.c_str(), NULL, &required_size);
@@ -270,8 +279,6 @@ private:
         io_conf_tx.intr_type = GPIO_INTR_DISABLE;
         io_conf_tx.mode = GPIO_MODE_OUTPUT;
         io_conf_tx.pin_bit_mask = (1ULL << IR_TRANSMITTER_GPIO);
-        io_conf_tx.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        io_conf_tx.pull_up_en = GPIO_PULLUP_DISABLE;
         gpio_config(&io_conf_tx);
         gpio_set_level(IR_TRANSMITTER_GPIO, 0);
 
@@ -956,7 +963,17 @@ public:
 
         InitDisplay();
 
-        // Khởi chạy task ngầm kiểm tra license/bảo mật sau khi thiết bị khởi động
+        // Đọc MAC ngay lập tức để chuẩn bị cho MCP Tools trước khi check kết quả mạng
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        device_mac_str_ = std::string(mac_str);
+
+        // Đăng ký toàn bộ MCP Tools hệ thống mới (mac & expiration)
+        InitializeSystemInfoMcp();
+
+        // Khởi chạy task ngầm kiểm tra bảo mật & ngày hết hạn bản quyền
         xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
