@@ -900,7 +900,7 @@ private:
     }
 
     // ==========================================
-    //  TẤT CẢ MCP TOOLS ĐẦY ĐỦ
+    //  TẤT CẢ MCP TOOLS ĐẦY ĐỦ (Bao gồm lấy MAC)
     // ==========================================
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
@@ -965,6 +965,14 @@ private:
                 int adc_value = 0;
                 adc_oneshot_read(adc_handle_, POWER_ADC_CHANNEL, &adc_value);
                 return std::to_string((adc_value * 100) / 4095) + "%";
+            });
+    }
+
+    void InitializeMacMcp() {
+        auto& mcp = McpServer::GetInstance();
+        mcp.AddTool("self.device.mac", "Lấy địa chỉ MAC của thiết bị", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return std::string(getMacAddress().c_str());
             });
     }
 
@@ -1065,6 +1073,7 @@ public:
         InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
+        InitializeMacMcp(); // Thêm công cụ lấy MAC vào MCP server
 
         InitAHT20();
         InitializeAHT20Mcp();
