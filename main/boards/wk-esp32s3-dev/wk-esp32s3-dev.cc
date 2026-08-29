@@ -124,13 +124,13 @@ private:
     // ==========================================
     //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN NVS NỘI BỘ
     // ==========================================
-    String getMacAddress() {
+    std::string getMacAddress() {
         uint8_t base_mac[6];
         esp_read_mac(base_mac, ESP_MAC_WIFI_STA);
         char macStr[18];
         snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
                  base_mac[0], base_mac[1], base_mac[2], base_mac[3], base_mac[4], base_mac[5]);
-        return String(macStr);
+        return std::string(macStr);
     }
 
     bool verifyLicense() {
@@ -818,18 +818,14 @@ public:
 
         configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); 
 
-        int wifi_timeout = 0;
-        while (WiFi.status() != WL_CONNECTED && wifi_timeout < 20) {
-            delay(500);
-            wifi_timeout++;
-        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
 
         if (!verifyLicense()) {
             ESP_LOGE(TAG, "=========================================");
             ESP_LOGE(TAG, "THIẾT BỊ BỊ KHÓA BẢN QUYỀN!");
             ESP_LOGE(TAG, "=========================================");
             while (true) {
-                delay(1000); 
+                vTaskDelay(pdMS_TO_TICKS(1000)); 
             }
         }
 
