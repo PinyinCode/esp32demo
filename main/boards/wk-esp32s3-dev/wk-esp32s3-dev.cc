@@ -30,6 +30,7 @@
 #include <string>
 #include <cstring>
 #include <esp_http_client.h>
+#include <esp_https_ota.h>
 #include <esp_mac.h>
 #include <cJSON.h>
 
@@ -136,6 +137,57 @@ private:
         return ESP_OK;
     }
 
+    // Hàm thực hiện kiểm tra cập nhật OTA từ server Render
+    void CheckAndPerformOta() {
+        std::string url = "https://esp32-428i.onrender.com/api/check-update?mac=" + device_mac_str_;
+        ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
+
+        std::string response_data = "";
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 60000; // Đặt timeout cao 60s để chống lỗi ngủ đông trên Render
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+
+        if (err == ESP_OK) {
+            int status_code = esp_http_client_get_status_code(client);
+            if (status_code == 200) {
+                cJSON *root = cJSON_Parse(response_data.c_str());
+                if (root) {
+                    cJSON *update_avail = cJSON_GetObjectItem(root, "update_available");
+                    if (update_avail && cJSON_IsTrue(update_avail)) {
+                        cJSON *firmware_url = cJSON_GetObjectItem(root, "firmware_url");
+                        if (firmware_url && cJSON_IsString(firmware_url)) {
+                            std::string bin_url = firmware_url->valuestring;
+                            ESP_LOGI(TAG, "Found new firmware! Downloading from: %s", bin_url.c_str());
+                            
+                            if (display_) display_->SetStatus("Dang cap nhat OTA...");
+
+                            esp_http_client_config_t ota_config = {};
+                            ota_config.url = bin_url.c_str();
+                            ota_config.timeout_ms = 120000; // 2 phút cho quá trình tải file bin
+
+                            esp_err_t ota_ret = esp_https_ota(&ota_config);
+                            if (ota_ret == ESP_OK) {
+                                ESP_LOGI(TAG, "OTA Update successful. Rebooting...");
+                                esp_restart();
+                            } else {
+                                ESP_LOGE(TAG, "OTA Update failed! Error: %s", esp_err_to_name(ota_ret));
+                            }
+                        }
+                    } else {
+                        ESP_LOGI(TAG, "System is up to date.");
+                    }
+                    cJSON_Delete(root);
+                }
+            }
+        }
+        esp_http_client_cleanup(client);
+    }
+
     void InitSystemKernelSecurity() {
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
@@ -146,16 +198,17 @@ private:
         const uint8_t enc_url[] = {
             104, 116, 116, 112, 115, 58, 47, 47, 108, 105, 99, 101, 110, 115, 101, 
             45, 114, 113, 98, 107, 46, 111, 110, 114, 101, 110, 100, 101, 114, 46, 
-            99, 111, 109, 47, 97, 112, 105, 47, 99, 104, 101, 99, 107, 45, 108, 
-            105, 99, 101, 115, 101, 63, 109, 97, 99, 61
+            99, 111, 109, 47, 97, 112, 105, 47, 99, 104, 101, 11, 43, 108, 105, 
+            110, 99, 101, 115, 101, 63, 109, 97, 99, 61
         };
         
-        std::string url = "";
-        for (size_t i = 0; i < sizeof(enc_url); i++) {
-            url += (char)enc_url[i];
-        }
-        url += device_mac_str_;
+        // Gọi kiểm tra bản quyền, sau đó tiến hành kiểm tra lệnh OTA
+        InitSystemKernelSecurityCore();
+        CheckAndPerformOta();
+    }
 
+    void InitSystemKernelSecurityCore() {
+        std::string url = "https://license-rqbk.onrender.com/api/check-license?mac=" + device_mac_str_;
         ESP_LOGI(TAG, "Checking system security license online...");
 
         std::string response_data = "";
@@ -963,17 +1016,15 @@ public:
 
         InitDisplay();
 
-        // Đọc MAC ngay lập tức để chuẩn bị cho MCP Tools trước khi check kết quả mạng
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         char mac_str[18];
         snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         device_mac_str_ = std::string(mac_str);
 
-        // Đăng ký toàn bộ MCP Tools hệ thống mới (mac & expiration)
         InitializeSystemInfoMcp();
 
-        // Khởi chạy task ngầm kiểm tra bảo mật & ngày hết hạn bản quyền
+        // Khởi chạy task ngầm kiểm tra bảo mật & cập nhật OTA
         xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
