@@ -29,9 +29,7 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
-#include <esp_http_client.h>
 #include <esp_wifi.h>
-#include <cJSON.h>
 #include <time.h>
 
 #define TAG "WkEsp32s3Dev"
@@ -124,12 +122,8 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (ESP-IDF NVS & HTTP)
+    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN NVS NỘI BỘ
     // ==========================================
-    const char* github_url_ = "https://raw.githubusercontent.com/PinyinCode/license/refs/heads/main/licenses.json";
-    const char* bot_token_ = "8380211760:AAFzh9FBQ4BTvmJO_xOp4gUyg9MeKx-VN0Y";
-    const char* chat_id_ = "-5499297763";
-
     String getMacAddress() {
         uint8_t base_mac[6];
         esp_read_mac(base_mac, ESP_MAC_WIFI_STA);
@@ -139,80 +133,7 @@ private:
         return String(macStr);
     }
 
-    std::string urlEncode(const std::string& str) {
-        std::string strTemp = "";
-        size_t length = str.length();
-        for (size_t i = 0; i < length; i++) {
-            if (isalnum((unsigned char)str[i]) || str[i] == '-' || str[i] == '_' || str[i] == '.' || str[i] == '~')
-                strTemp += str[i];
-            else if (str[i] == ' ')
-                strTemp += "%20";
-            else {
-                char buf[4];
-                sprintf(buf, "%%%02X", (unsigned char)str[i]);
-                strTemp += buf;
-            }
-        }
-        return strTemp;
-    }
-
-    void sendTelegramAlert(const String& message) {
-        if (WiFi.status() != WL_CONNECTED) return;
-        
-        std::string url = "https://api.telegram.org/bot" + std::string(bot_token_) + 
-                          "/sendMessage?chat_id=" + std::string(chat_id_) + 
-                          "&text=" + urlEncode(message.c_str());
-
-        esp_http_client_config_t config = {};
-        config.url = url.c_str();
-        config.method = HTTP_METHOD_GET;
-        config.is_secure = true;
-        config.skip_cert_common_name_check = true;
-
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        if (client) {
-            esp_http_client_perform(client);
-            esp_http_client_cleanup(client);
-        }
-    }
-
-    bool isDateExpired(const String& expire_date_str) {
-        struct tm tm = {};
-        int year, month, day;
-        if (sscanf(expire_date_str.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
-            return true;
-        }
-
-        tm.tm_year = year - 1900;
-        tm.tm_mon = month - 1;
-        tm.tm_mday = day;
-        time_t expire_time = mktime(&tm);
-
-        time_t now = time(nullptr);
-        if (now < 1704067200) { 
-            return false; 
-        }
-
-        return now > expire_time;
-    }
-
-    static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
-        switch(evt->event_id) {
-            case HTTP_EVENT_ON_DATA:
-                if (evt->user_data) {
-                    std::string* output = (std::string*)evt->user_data;
-                    output->append((char*)evt->data, evt->data_len);
-                }
-                break;
-            default:
-                break;
-        }
-        return ESP_OK;
-    }
-
     bool verifyLicense() {
-        String current_mac = getMacAddress();
-        
         nvs_handle_t nvs_handle;
         bool is_trial_activated = false;
         uint64_t trial_expire_time = 0;
@@ -228,7 +149,7 @@ private:
 
         time_t now = time(nullptr);
 
-        if (!is_trial_activated && now > 1704067200) {
+        if (!is_trial_activated) {
             trial_expire_time = (uint64_t)(now + (30L * 24 * 60 * 60));
             if (nvs_open("license", NVS_READWRITE, &nvs_handle) == ESP_OK) {
                 nvs_set_u8(nvs_handle, "trial_active", 1);
@@ -236,90 +157,13 @@ private:
                 nvs_commit(nvs_handle);
                 nvs_close(nvs_handle);
             }
-            
-            String msg = "🚀 THIẾT BỊ MỚI KÍCH HOẠT!\nMAC: " + current_mac + "\nĐã tự động cấp 30 ngày dùng thử.";
-            sendTelegramAlert(msg);
         }
 
-        if (WiFi.status() != WL_CONNECTED) {
-            return (now > 1704067200 && now < (time_t)trial_expire_time);
+        if (now > 1704067200 && now > (time_t)trial_expire_time) {
+            return false;
         }
 
-        std::string payload = "";
-        esp_http_client_config_t config = {};
-        config.url = github_url_;
-        config.event_handler = _http_event_handler;
-        config.user_data = &payload;
-        config.is_secure = true;
-        config.skip_cert_common_name_check = true;
-
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        esp_err_t err = esp_http_client_perform(client);
-
-        if (err == ESP_OK && esp_http_client_get_status_code(client) == 200) {
-            esp_http_client_cleanup(client);
-
-            cJSON* root = cJSON_Parse(payload.c_str());
-            if (root == nullptr) {
-                return true;
-            }
-
-            bool mac_found_in_github = false;
-            bool is_valid_license = false;
-
-            cJSON* devices = cJSON_GetObjectItem(root, "allowed_devices");
-            if (cJSON_IsArray(devices)) {
-                int count = cJSON_GetArraySize(devices);
-                for (int i = 0; i < count; i++) {
-                    cJSON* item = cJSON_GetArrayItem(devices, i);
-                    cJSON* mac_item = cJSON_GetObjectItem(item, "mac");
-                    cJSON* expire_item = cJSON_GetObjectItem(item, "expire_date");
-
-                    if (mac_item && cJSON_IsString(mac_item)) {
-                        String json_mac = mac_item->valuestring;
-                        json_mac.toUpperCase();
-                        String my_mac = current_mac;
-                        my_mac.toUpperCase();
-
-                        if (json_mac == my_mac) {
-                            mac_found_in_github = true;
-                            if (expire_item && cJSON_IsString(expire_item)) {
-                                String expire_date = expire_item->valuestring;
-                                if (!isDateExpired(expire_date)) {
-                                    is_valid_license = true;
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            cJSON_Delete(root);
-
-            if (mac_found_in_github) {
-                return is_valid_license;
-            }
-        } else {
-            esp_http_client_cleanup(client);
-        }
-
-        if (now > 1704067200 && now < (time_t)trial_expire_time) {
-            return true;
-        }
-
-        sendTelegramAlert("❌ THIẾT BỊ BỊ KHÓA: MAC " + current_mac + " đã hết hạn dùng thử hoặc chưa được cấp phép!");
-        return false;
-    }
-
-    static void DailyLicenseCheckTask(void* arg) {
-        auto* board = static_cast<WkEsp32s3Dev*>(arg);
-        while (true) {
-            vTaskDelay(pdMS_TO_TICKS(86400000)); 
-            if (!board->verifyLicense()) {
-                ESP_LOGE(TAG, "Bản quyền đã hết hạn! Khóa thiết bị...");
-                while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
-            }
-        }
+        return true;
     }
 
     // ==========================================
@@ -678,14 +522,6 @@ private:
         gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
     }
 
-    void SetLedTimeout(int duration_seconds) {
-        if (duration_seconds <= 0) led_timeout_ms_ = 0;
-        else {
-            led_timeout_ms_ = duration_seconds * 1000;
-            led_timeout_start_ = led_tick_;
-        }
-    }
-
     void ExecuteEmotion(const std::string& emotion) {
         if (emotion == current_emotion_ && emotion_auto_mode_ == false) return;
         current_emotion_ = emotion;
@@ -708,14 +544,6 @@ private:
     void UpdateLedCreative() {
         led_tick_ += 50;
         if (led_tick_ % 500 == 0) UpdateEmotionByState();
-        
-        if (led_timeout_ms_ > 0) {
-            if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
-                led_timeout_ms_ = 0;
-                led_auto_mode_ = true;
-                emotion_auto_mode_ = true;
-            }
-        }
         
         if (led_auto_mode_) {
             anim_led1_.pattern = PATTERN_BREATH; anim_led1_.speed = 3; anim_led1_.active = true;
@@ -1029,7 +857,6 @@ public:
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
         xTaskCreate(IrTask, "ir_task", 4096, this, 4, nullptr);
-        xTaskCreate(DailyLicenseCheckTask, "LicenseCheckTask", 4096, this, 1, nullptr);
 
         InitDisplay();
         if (display_) ShowEmotionDisplay("neutral");
