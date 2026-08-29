@@ -1088,6 +1088,7 @@ idf_component_register(SRCS ${SOURCES}
                         fatfs
                         xiaozhi-fonts
                        esp_http_client
+                       esp_https_ota
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
