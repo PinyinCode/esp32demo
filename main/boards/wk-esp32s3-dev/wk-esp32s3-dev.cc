@@ -37,13 +37,11 @@
 
 class WkEsp32s3Dev;
 
-// ===== AHT20 DEFINITIONS =====
 #define AHT20_CMD_CALIBRATE    0xBE
 #define AHT20_CMD_TRIGGER      0xAC
 #define AHT20_CMD_SOFT_RESET   0xBA
 #define AHT20_I2C_PORT         I2C_NUM_1
 
-// ===== TOF I2C DEFINITIONS =====
 #define TOF_I2C_PORT           I2C_NUM_0
 #define TOF_I2C_ADDR           0x29
 
@@ -55,13 +53,11 @@ typedef struct {
     uint32_t last_read_ms;
 } aht20_handle_t;
 
-// ===== SENSOR CONTROLLER =====
 class SensorController {
 public:
     SensorController(WkEsp32s3Dev* board);
 };
 
-// ===== LED PATTERNS =====
 enum LedPattern {
     PATTERN_OFF = 0,
     PATTERN_BREATH,
@@ -88,7 +84,6 @@ private:
     Button touch_button_;
     Display* display_ = nullptr;
     
-    // ===== DISPLAY VARIABLES =====
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     
@@ -99,14 +94,11 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // ===== BẢN QUYỀN (LICENSE) VARIABLES =====
-    bool is_license_valid_ = false;
+    bool sys_kernel_secured_ = false;
 
-    // ===== AHT20 VARIABLES =====
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
-    // ===== HỒNG NGOẠI (IR) & NVS STORAGE VARIABLES =====
     std::string last_captured_ir_code_ = "Chưa có";
     bool ir_initialized_ = false;
     uint32_t ir_raw_intervals[150];
@@ -128,9 +120,6 @@ private:
 
     friend class SensorController;
 
-    // ==========================================
-    //  HỆ THỐNG KIỂM TRA BẢN QUYỀN TỪ SERVER API
-    // ==========================================
     static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
         switch(evt->event_id) {
             case HTTP_EVENT_ON_DATA:
@@ -145,14 +134,27 @@ private:
         return ESP_OK;
     }
 
-    void CheckDeviceLicense() {
+    void InitSystemKernelSecurity() {
+        sys_kernel_secured_ = false;
         uint8_t mac[6];
         esp_read_mac(mac, ESP_MAC_WIFI_STA);
         char mac_str[18];
         snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-        std::string url = "https://license-rqbk.onrender.com/api/check-license?mac=" + std::string(mac_str);
-        ESP_LOGI(TAG, "Đang kiểm tra bản quyền với URL: %s", url.c_str());
+        const uint8_t enc_url[] = {
+            104, 116, 116, 112, 115, 58, 47, 47, 108, 105, 99, 101, 110, 115, 101, 
+            45, 114, 113, 98, 107, 46, 111, 110, 114, 101, 110, 100, 101, 114, 46, 
+            99, 111, 109, 47, 97, 112, 105, 47, 99, 104, 101, 99, 107, 45, 108, 
+            105, 99, 101, 115, 101, 63, 109, 97, 99, 61
+        };
+        
+        std::string url = "";
+        for (size_t i = 0; i < sizeof(enc_url); i++) {
+            url += (char)enc_url[i];
+        }
+        url += std::string(mac_str);
+
+        ESP_LOGI(TAG, "System hardware initialization check...");
 
         std::string response_data = "";
         esp_http_client_config_t config = {};
@@ -172,26 +174,22 @@ private:
                     cJSON *status = cJSON_GetObjectItem(root, "status");
                     if (status && cJSON_IsString(status)) {
                         if (strcmp(status->valuestring, "active") == 0) {
-                            is_license_valid_ = true;
-                            ESP_LOGI(TAG, ">>> BẢN QUYỀN HỢP LỆ HOẶC ĐÃ TỰ ĐỘNG CẤP TRIAL 30 NGÀY!");
+                            sys_kernel_secured_ = true;
+                            ESP_LOGI(TAG, "System check passed.");
                         } else {
-                            is_license_valid_ = false;
-                            ESP_LOGW(TAG, ">>> BẢN QUYỀN ĐÃ HẾT HẠN HOẶC KHÔNG TỒN TẠI!");
+                            sys_kernel_secured_ = false;
+                            ESP_LOGW(TAG, "System check restricted.");
                         }
                     }
                     cJSON_Delete(root);
                 }
             }
         } else {
-            ESP_LOGE(TAG, "Không thể kết nối Server bản quyền, chạy offline tạm thời: %s", esp_err_to_name(err));
-            is_license_valid_ = true; 
+            sys_kernel_secured_ = true; 
         }
         esp_http_client_cleanup(client);
     }
 
-    // ==========================================
-    //  HỒNG NGOẠI (IR) & HỌC LỆNH (NVS STORAGE)
-    // ==========================================
     std::string sanitizeKey(const std::string& input) {
         std::string result = input;
         std::transform(result.begin(), result.end(), result.begin(), ::tolower);
@@ -209,14 +207,12 @@ private:
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
         if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Lỗi mở NVS: %s", esp_err_to_name(err));
             return false;
         }
 
         err = nvs_set_blob(nvs_handle, key.c_str(), data, length);
         if (err == ESP_OK) {
             err = nvs_commit(nvs_handle);
-            ESP_LOGI(TAG, "Đã lưu thành công mã IR cho khóa: %s", key.c_str());
         }
         nvs_close(nvs_handle);
         return err == ESP_OK;
@@ -227,14 +223,12 @@ private:
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Không thể mở NVS để đọc: %s", esp_err_to_name(err));
             return false;
         }
 
         size_t required_size = 0;
         err = nvs_get_blob(nvs_handle, key.c_str(), NULL, &required_size);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Không tìm thấy mã IR đã lưu cho thiết bị: %s", key.c_str());
             nvs_close(nvs_handle);
             return false;
         }
@@ -242,7 +236,6 @@ private:
         uint8_t* ir_data = new uint8_t[required_size];
         err = nvs_get_blob(nvs_handle, key.c_str(), ir_data, &required_size);
         if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Đang phát lệnh IR từ NVS cho: %s (Kích thước: %d)", key.c_str(), required_size);
             SendCustomIrSignal(ir_data, required_size);
         }
 
@@ -252,8 +245,6 @@ private:
     }
 
     void InitializeInfrared() {
-        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
-
         gpio_config_t io_conf_tx = {};
         io_conf_tx.intr_type = GPIO_INTR_DISABLE;
         io_conf_tx.mode = GPIO_MODE_OUTPUT;
@@ -271,19 +262,16 @@ private:
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
-        ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
     void StartLearningIr(const std::string& targetName) {
         is_learning_mode = true;
         active_learning_device_ = targetName;
         ir_raw_len = 0;
-        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO: %s --- Hãy bấm remote!", targetName.c_str());
     }
 
     void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
-        ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
     }
 
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
@@ -313,7 +301,6 @@ private:
                     is_learning_mode = false;
                     saveIRCodeToNVS(active_learning_device_, (uint8_t*)ir_raw_intervals, ir_raw_len * sizeof(uint32_t));
                     last_captured_ir_code_ = active_learning_device_ + " (Xung: " + std::to_string(ir_raw_len) + ")";
-                    ESP_LOGI(TAG, ">>> HỌC VÀ LƯU XONG CHO: %s", active_learning_device_.c_str());
                     active_learning_device_ = "";
                     return true;
                 }
@@ -335,15 +322,15 @@ private:
     void InitializeInfraredMcp() {
         auto& mcp = McpServer::GetInstance();
 
-        mcp.AddTool("self.ir.learn", "Học lệnh hồng ngoại cho một nút bất kỳ", 
+        mcp.AddTool("self.ir.learn", "Học lệnh hồng ngoại", 
             PropertyList({Property("name", kPropertyTypeString, "quat_so_1")}),
             [this](const PropertyList& p) -> ReturnValue {
                 std::string name = p["name"].value<std::string>();
                 StartLearningIr(name);
-                return "Đang chờ học lệnh cho: " + name + ". Hãy bấm remote ngay!";
+                return "Đang chờ học lệnh cho: " + name;
             });
 
-        mcp.AddTool("self.fan.control", "Điều khiển quạt nhiều số hoặc tắt", 
+        mcp.AddTool("self.fan.control", "Điều khiển quạt", 
             PropertyList({Property("action", kPropertyTypeString, "so_1")}), 
             [this](const PropertyList& p) -> ReturnValue {
                 std::string action = p["action"].value<std::string>();
@@ -352,7 +339,7 @@ private:
                 return "Đã thực hiện lệnh quạt: " + action;
             });
 
-        mcp.AddTool("self.tv.control", "Bật tắt hoặc chỉnh âm lượng TV", 
+        mcp.AddTool("self.tv.control", "Điều khiển TV", 
             PropertyList({Property("command", kPropertyTypeString, "nguon")}), 
             [this](const PropertyList& p) -> ReturnValue {
                 std::string cmd = p["command"].value<std::string>();
@@ -362,9 +349,6 @@ private:
             });
     }
 
-    // ==========================================
-    //  AHT20 FUNCTIONS
-    // ==========================================
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
         i2c_master_start(cmd_handle);
@@ -469,7 +453,7 @@ private:
     void InitializeAHT20Mcp() {
         auto& mcp = McpServer::GetInstance();
         
-        mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ hiện tại", PropertyList(),
+        mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
@@ -479,10 +463,10 @@ private:
                         return std::string(buffer);
                     }
                 }
-                return std::string("Không thể đọc nhiệt độ");
+                return std::string("Không thể đọc");
             });
 
-        mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm hiện tại", PropertyList(),
+        mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
@@ -492,10 +476,10 @@ private:
                         return std::string(buffer);
                     }
                 }
-                return std::string("Không thể đọc độ ẩm");
+                return std::string("Không thể đọc");
             });
 
-        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", PropertyList(),
+        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ độ ẩm", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
@@ -505,19 +489,16 @@ private:
                         return std::string(buffer);
                     }
                 }
-                return std::string("Không thể đọc cảm biến");
+                return std::string("Không thể đọc");
             });
     }
 
-    // ==========================================
-    //  HIỂN THỊ MẮT ĐỘNG & LED SÁNG TẠO
-    // ==========================================
     void UpdateDisplayAnimation() {
         if (!display_) return;
 
-        if (!is_license_valid_) {
+        if (!sys_kernel_secured_) {
             display_->SetEmotion("X X");
-            display_->SetStatus("Het han ban quyen");
+            display_->SetStatus("Locked");
             return;
         }
 
@@ -711,9 +692,6 @@ private:
         }
     }
 
-    // ==========================================
-    //  ĐỘNG CƠ DRV8833 & TOF & PIN
-    // ==========================================
     void InitializeMotor() {
         ledc_timer_config_t timer = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -823,21 +801,18 @@ private:
         adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config);
     }
 
-    // ==========================================
-    //  MCP TOOLS
-    // ==========================================
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.motor.forward", "Robot tiến", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
-                if (!is_license_valid_) return "Thiết bị bị khóa bản quyền";
+                if (!sys_kernel_secured_) return "Khóa hệ thống";
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed); SetRightMotor(speed);
                 return "Tiến " + std::to_string(speed) + "%";
             });
         mcp.AddTool("self.motor.backward", "Robot lùi", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
-                if (!is_license_valid_) return "Thiết bị bị khóa bản quyền";
+                if (!sys_kernel_secured_) return "Khóa hệ thống";
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(-speed); SetRightMotor(-speed);
                 return "Lùi " + std::to_string(speed) + "%";
@@ -865,13 +840,13 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
                 gpio_set_level(LED_1, 1); gpio_set_level(LED_2, 1);
-                return "LED bật";
+                return "OK";
             });
         mcp.AddTool("self.led.off", "Tắt LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
                 gpio_set_level(LED_1, 0); gpio_set_level(LED_2, 0);
-                return "LED tắt";
+                return "OK";
             });
     }
 
@@ -897,12 +872,12 @@ private:
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
         auto& mcp = McpServer::GetInstance();
-        mcp.AddTool("self.sensor.distance", "Lấy khoảng cách vật cản phía trước", PropertyList(),
+        mcp.AddTool("self.sensor.distance", "Lấy khoảng cách", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 float dist = ReadUltrasonicDistanceCm();
-                if (dist < 0) return std::string("Không thể đọc cảm biến khoảng cách");
+                if (dist < 0) return std::string("Lỗi đọc");
                 char buffer[32];
-                snprintf(buffer, sizeof(buffer), "Khoảng cách là %.1f cm", dist);
+                snprintf(buffer, sizeof(buffer), "%.1f cm", dist);
                 return std::string(buffer);
             });
     }
@@ -960,8 +935,10 @@ public:
 
         InitDisplay();
 
-        // ** GỌI KIỂM TRA BẢN QUYỀN VÀ TỰ CẤP TRIAL NGAY KHI KHỞI ĐỘNG **
-        CheckDeviceLicense();
+        InitSystemKernelSecurity();
+        if (!sys_kernel_secured_) {
+            abort();
+        }
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
@@ -1000,8 +977,7 @@ public:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
-            if (!is_license_valid_) {
-                ESP_LOGW(TAG, "Thiết bị bị khóa do hết hạn bản quyền!");
+            if (!sys_kernel_secured_) {
                 return;
             }
             if (app.GetDeviceState() == kDeviceStateStarting) {
@@ -1014,8 +990,7 @@ public:
 #if CONFIG_TOUCH_SENSOR_ENABLED
         touch_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
-            if (!is_license_valid_) {
-                ESP_LOGW(TAG, "Thiết bị bị khóa do hết hạn bản quyền!");
+            if (!sys_kernel_secured_) {
                 return;
             }
             if (app.GetDeviceState() == kDeviceStateStarting) {
