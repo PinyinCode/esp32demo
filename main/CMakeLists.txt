@@ -1087,7 +1087,7 @@ idf_component_register(SRCS ${SOURCES}
                         bt
                         fatfs
                         xiaozhi-fonts
-                       
+                       esp_http_client
                         ${MAIN_PRIV_REQUIRES_EXTRA}
                     )
 
