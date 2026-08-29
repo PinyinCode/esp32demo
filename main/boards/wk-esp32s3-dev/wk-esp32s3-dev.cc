@@ -29,7 +29,9 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
-#include <ctime>
+#include <HTTPClient.h>
+#include <cJSON.h>
+#include <time.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -121,53 +123,153 @@ private:
     bool emotion_auto_mode_ = true;
     bool is_blinking_ = false;
 
-    // ==========================================
-    //  CƠ CHẾ QUẢN LÝ BẢN QUYỀN NVS & NẠP CỨNG
-    // ==========================================
-    // Cài đặt mốc thời gian hết hạn dạng Unix Timestamp (Ví dụ: Ngày 31/12/2030 -> 1924982400)
-    const int64_t HARDCODED_LICENSE_EXPIRATION = 1924982400; 
-    bool license_valid_ = true;
-
-    void CheckAndSaveHardcodedLicense() {
-        nvs_handle_t nvs_handle;
-        if (nvs_open("storage", NVS_READWRITE, &nvs_handle) == ESP_OK) {
-            int64_t current_exp = 0;
-            esp_err_t err = nvs_get_i64(nvs_handle, "license_exp", &current_exp);
-            
-            if (err != ESP_OK || current_exp != HARDCODED_LICENSE_EXPIRATION) {
-                nvs_set_i64(nvs_handle, "license_exp", HARDCODED_LICENSE_EXPIRATION);
-                nvs_commit(nvs_handle);
-                ESP_LOGI(TAG, "Đã nạp cứng mốc hạn sử dụng vào NVS thành công!");
-            }
-            nvs_close(nvs_handle);
-        }
-    }
-
-    void ValidateLicense() {
-        CheckAndSaveHardcodedLicense();
-
-        nvs_handle_t nvs_handle;
-        int64_t expires_at = 0;
-        if (nvs_open("storage", NVS_READONLY, &nvs_handle) == ESP_OK) {
-            nvs_get_i64(nvs_handle, "license_exp", &expires_at);
-            nvs_close(nvs_handle);
-        }
-
-        time_t now;
-        time(&now);
-
-        if (expires_at > 0 && now > expires_at) {
-            license_valid_ = false;
-            ESP_LOGE(TAG, "==========================================");
-            ESP_LOGE(TAG, "THIẾT BỊ ĐÃ HẾT HẠN BẢN QUYỀN SỬ DỤNG!");
-            ESP_LOGE(TAG, "==========================================");
-        } else {
-            license_valid_ = true;
-            ESP_LOGI(TAG, "Bản quyền hợp lệ. Hết hạn Unix: %lld", expires_at);
-        }
-    }
-
     friend class SensorController;
+
+    // ==========================================
+    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN (GITHUB & TELEGRAM)
+    // ==========================================
+    const char* github_url_ = "https://raw.githubusercontent.com/PinyinCode/license/refs/heads/main/licenses.json";
+    const char* bot_token_ = "YOUR_TELEGRAM_BOT_TOKEN";
+    const char* chat_id_ = "YOUR_TELEGRAM_CHAT_ID";
+    Preferences preferences_;
+
+    String getMacAddress() {
+        return WiFi.macAddress();
+    }
+
+    void sendTelegramAlert(const String& message) {
+        if (WiFi.status() != WL_CONNECTED) return;
+        
+        HTTPClient http;
+        String url = "https://api.telegram.org/bot" + String(bot_token_) + 
+                     "/sendMessage?chat_id=" + String(chat_id_) + 
+                     "&text=" + urlEncode(message);
+        
+        http.begin(url);
+        http.GET();
+        http.end();
+    }
+
+    String urlEncode(String str) {
+        str.replace(" ", "%20");
+        str.replace(":", "%3A");
+        str.replace("\n", "%0A");
+        return str;
+    }
+
+    bool isDateExpired(const String& expire_date_str) {
+        struct tm tm = {};
+        int year, month, day;
+        if (sscanf(expire_date_str.c_str(), "%d-%d-%d", &year, &month, &day) != 3) {
+            return true;
+        }
+
+        tm.tm_year = year - 1900;
+        tm.tm_mon = month - 1;
+        tm.tm_mday = day;
+        time_t expire_time = mktime(&tm);
+
+        time_t now = time(nullptr);
+        if (now < 1704067200) { 
+            return false; 
+        }
+
+        return now > expire_time;
+    }
+
+    bool verifyLicense() {
+        String current_mac = getMacAddress();
+        
+        bool is_trial_activated = preferences_.getBool("trial_active", false);
+        unsigned long trial_expire_time = preferences_.getULong("trial_expire", 0);
+        time_t now = time(nullptr);
+
+        if (!is_trial_activated && now > 1704067200) {
+            trial_expire_time = now + (30L * 24 * 60 * 60);
+            preferences_.putBool("trial_active", true);
+            preferences_.putULong("trial_expire", trial_expire_time);
+            
+            String msg = "🚀 THIẾT BỊ MỚI KÍCH HOẠT!\nMAC: " + current_mac + "\nĐã tự động cấp 30 ngày dùng thử.";
+            sendTelegramAlert(msg);
+        }
+
+        if (WiFi.status() != WL_CONNECTED) {
+            if (now > 1704067200 && now < trial_expire_time) {
+                return true;
+            }
+            return true;
+        }
+
+        HTTPClient http;
+        http.begin(github_url_);
+        int httpResponseCode = http.GET();
+
+        if (httpResponseCode > 0) {
+            String payload = http.getString();
+            http.end();
+
+            cJSON* root = cJSON_Parse(payload.c_str());
+            if (root == nullptr) {
+                return true;
+            }
+
+            bool mac_found_in_github = false;
+            bool is_valid_license = false;
+
+            cJSON* devices = cJSON_GetObjectItem(root, "allowed_devices");
+            if (cJSON_IsArray(devices)) {
+                int count = cJSON_GetArraySize(devices);
+                for (int i = 0; i < count; i++) {
+                    cJSON* item = cJSON_GetArrayItem(devices, i);
+                    cJSON* mac_item = cJSON_GetObjectItem(item, "mac");
+                    cJSON* expire_item = cJSON_GetObjectItem(item, "expire_date");
+
+                    if (mac_item && cJSON_IsString(mac_item)) {
+                        String json_mac = mac_item->valuestring;
+                        json_mac.toUpperCase();
+                        String my_mac = current_mac;
+                        my_mac.toUpperCase();
+
+                        if (json_mac == my_mac) {
+                            mac_found_in_github = true;
+                            if (expire_item && cJSON_IsString(expire_item)) {
+                                String expire_date = expire_item->valuestring;
+                                if (!isDateExpired(expire_date)) {
+                                    is_valid_license = true;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            cJSON_Delete(root);
+
+            if (mac_found_in_github) {
+                return is_valid_license;
+            }
+        } else {
+            http.end();
+        }
+
+        if (now > 1704067200 && now < trial_expire_time) {
+            return true;
+        }
+
+        sendTelegramAlert("❌ THIẾT BỊ BỊ KHÓA: MAC " + current_mac + " đã hết hạn dùng thử hoặc chưa được cấp phép!");
+        return false;
+    }
+
+    static void DailyLicenseCheckTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(86400000)); // Kiểm tra lại sau mỗi 24 giờ
+            if (!board->verifyLicense()) {
+                ESP_LOGE(TAG, "Bản quyền đã hết hạn! Khóa thiết bị...");
+                while (true) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+            }
+        }
+    }
 
     // ==========================================
     //  HỒNG NGOẠI (IR) & HỌC LỆNH (NVS STORAGE)
@@ -251,6 +353,7 @@ private:
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
+        ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
     void StartLearningIr(const std::string& targetName) {
@@ -323,7 +426,7 @@ private:
             });
 
         mcp.AddTool("self.fan.control", "Điều khiển quạt nhiều số hoặc tắt", 
-            PropertyList({Property("action", kPropertyTypeString, "so_1")}),
+            PropertyList({Property("action", kPropertyTypeString, "so_1")}), 
             [this](const PropertyList& p) -> ReturnValue {
                 std::string action = p["action"].value<std::string>();
                 std::string key = "fan_" + action;
@@ -332,7 +435,7 @@ private:
             });
 
         mcp.AddTool("self.tv.control", "Bật tắt hoặc chỉnh âm lượng TV", 
-            PropertyList({Property("command", kPropertyTypeString, "nguon")}),
+            PropertyList({Property("command", kPropertyTypeString, "nguon")}), 
             [this](const PropertyList& p) -> ReturnValue {
                 std::string cmd = p["command"].value<std::string>();
                 std::string key = "tv_" + cmd;
@@ -797,7 +900,7 @@ private:
     }
 
     // ==========================================
-    //  MCP TOOLS ĐẦY ĐỦ
+    //  TẤT CẢ MCP TOOLS ĐẦY ĐỦ
     // ==========================================
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
@@ -929,8 +1032,26 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
-        // Kiểm tra hạn sử dụng bản quyền từ NVS
-        ValidateLicense();
+        // 1. Khởi tạo NVS và kiểm tra bản quyền ngay khi khởi động
+        preferences_.begin("license", false);
+        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); // Đồng bộ giờ VN (UTC+7)
+
+        // Chờ kết nối Wi-Fi ổn định trong giây lát để check bản quyền online
+        int wifi_timeout = 0;
+        while (WiFi.status() != WL_CONNECTED && wifi_timeout < 20) {
+            delay(500);
+            wifi_timeout++;
+        }
+
+        if (!verifyLicense()) {
+            ESP_LOGE(TAG, "=========================================");
+            ESP_LOGE(TAG, "THIẾT BỊ BỊ KHÓA BẢN QUYỀN!");
+            ESP_LOGE(TAG, "Vui lòng liên hệ quản trị viên để gia hạn.");
+            ESP_LOGE(TAG, "=========================================");
+            while (true) {
+                delay(1000); // Dừng hệ thống, không cho chạy tiếp
+            }
+        }
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
@@ -955,6 +1076,7 @@ public:
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
         xTaskCreate(IrTask, "ir_task", 4096, this, 4, nullptr);
+        xTaskCreate(DailyLicenseCheckTask, "LicenseCheckTask", 4096, this, 1, nullptr);
 
         InitDisplay();
         if (display_) ShowEmotionDisplay("neutral");
@@ -974,11 +1096,6 @@ public:
                 EnterWifiConfigMode();
                 return;
             }
-            // Chặn kích hoạt gọi AI nếu hết hạn bản quyền
-            if (!license_valid_) {
-                ESP_LOGW(TAG, "Thiết bị đã hết hạn sử dụng. Không thể trò chuyện.");
-                return;
-            }
             app.ToggleChatState();
         });
 
@@ -989,7 +1106,6 @@ public:
                 EnterWifiConfigMode();
                 return;
             }
-            if (!license_valid_) return;
             app.ToggleChatState();
         });
 #endif
