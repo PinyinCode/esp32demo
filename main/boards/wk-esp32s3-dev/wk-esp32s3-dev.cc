@@ -29,8 +29,9 @@
 #include <algorithm>
 #include <string>
 #include <cstring>
-#include <esp_wifi.h>
-#include <time.h>
+#include <esp_http_client.h>
+#include <esp_mac.h>
+#include <cJSON.h>
 
 #define TAG "WkEsp32s3Dev"
 
@@ -87,6 +88,7 @@ private:
     Button touch_button_;
     Display* display_ = nullptr;
     
+    // ===== DISPLAY VARIABLES =====
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     
@@ -97,9 +99,14 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
+    // ===== BẢN QUYỀN (LICENSE) VARIABLES =====
+    bool is_license_valid_ = false;
+
+    // ===== AHT20 VARIABLES =====
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
+    // ===== HỒNG NGOẠI (IR) & NVS STORAGE VARIABLES =====
     std::string last_captured_ir_code_ = "Chưa có";
     bool ir_initialized_ = false;
     uint32_t ir_raw_intervals[150];
@@ -122,48 +129,64 @@ private:
     friend class SensorController;
 
     // ==========================================
-    //  HỆ THỐNG QUẢN LÝ BẢN QUYỀN NVS NỘI BỘ
+    //  HỆ THỐNG KIỂM TRA BẢN QUYỀN TỪ SERVER API
     // ==========================================
-    std::string getMacAddress() {
-        uint8_t base_mac[6];
-        esp_read_mac(base_mac, ESP_MAC_WIFI_STA);
-        char macStr[18];
-        snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 base_mac[0], base_mac[1], base_mac[2], base_mac[3], base_mac[4], base_mac[5]);
-        return std::string(macStr);
+    static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
+        switch(evt->event_id) {
+            case HTTP_EVENT_ON_DATA:
+                if (evt->user_data) {
+                    std::string* output = (std::string*)evt->user_data;
+                    output->append((char*)evt->data, evt->data_len);
+                }
+                break;
+            default:
+                break;
+        }
+        return ESP_OK;
     }
 
-    bool verifyLicense() {
-        nvs_handle_t nvs_handle;
-        bool is_trial_activated = false;
-        uint64_t trial_expire_time = 0;
+    void CheckDeviceLicense() {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-        if (nvs_open("license", NVS_READWRITE, &nvs_handle) == ESP_OK) {
-            uint8_t val = 0;
-            if (nvs_get_u8(nvs_handle, "trial_active", &val) == ESP_OK) {
-                is_trial_activated = (val == 1);
+        std::string url = "https://license-rqbk.onrender.com/api/check-license?mac=" + std::string(mac_str);
+        ESP_LOGI(TAG, "Đang kiểm tra bản quyền với URL: %s", url.c_str());
+
+        std::string response_data = "";
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 5000;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+
+        if (err == ESP_OK) {
+            int status_code = esp_http_client_get_status_code(client);
+            if (status_code == 200) {
+                cJSON *root = cJSON_Parse(response_data.c_str());
+                if (root) {
+                    cJSON *status = cJSON_GetObjectItem(root, "status");
+                    if (status && cJSON_IsString(status)) {
+                        if (strcmp(status->valuestring, "active") == 0) {
+                            is_license_valid_ = true;
+                            ESP_LOGI(TAG, ">>> BẢN QUYỀN HỢP LỆ HOẶC ĐÃ TỰ ĐỘNG CẤP TRIAL 30 NGÀY!");
+                        } else {
+                            is_license_valid_ = false;
+                            ESP_LOGW(TAG, ">>> BẢN QUYỀN ĐÃ HẾT HẠN HOẶC KHÔNG TỒN TẠI!");
+                        }
+                    }
+                    cJSON_Delete(root);
+                }
             }
-            nvs_get_u64(nvs_handle, "trial_expire", &trial_expire_time);
-            nvs_close(nvs_handle);
+        } else {
+            ESP_LOGE(TAG, "Không thể kết nối Server bản quyền, chạy offline tạm thời: %s", esp_err_to_name(err));
+            is_license_valid_ = true; 
         }
-
-        time_t now = time(nullptr);
-
-        if (!is_trial_activated) {
-            trial_expire_time = (uint64_t)(now + (30L * 24 * 60 * 60));
-            if (nvs_open("license", NVS_READWRITE, &nvs_handle) == ESP_OK) {
-                nvs_set_u8(nvs_handle, "trial_active", 1);
-                nvs_set_u64(nvs_handle, "trial_expire", trial_expire_time);
-                nvs_commit(nvs_handle);
-                nvs_close(nvs_handle);
-            }
-        }
-
-        if (now > 1704067200 && now > (time_t)trial_expire_time) {
-            return false;
-        }
-
-        return true;
+        esp_http_client_cleanup(client);
     }
 
     // ==========================================
@@ -185,11 +208,15 @@ private:
         std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
-        if (err != ESP_OK) return false;
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "Lỗi mở NVS: %s", esp_err_to_name(err));
+            return false;
+        }
 
         err = nvs_set_blob(nvs_handle, key.c_str(), data, length);
         if (err == ESP_OK) {
             err = nvs_commit(nvs_handle);
+            ESP_LOGI(TAG, "Đã lưu thành công mã IR cho khóa: %s", key.c_str());
         }
         nvs_close(nvs_handle);
         return err == ESP_OK;
@@ -199,11 +226,15 @@ private:
         std::string key = sanitizeKey(deviceName);
         nvs_handle_t nvs_handle;
         esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
-        if (err != ESP_OK) return false;
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Không thể mở NVS để đọc: %s", esp_err_to_name(err));
+            return false;
+        }
 
         size_t required_size = 0;
         err = nvs_get_blob(nvs_handle, key.c_str(), NULL, &required_size);
         if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Không tìm thấy mã IR đã lưu cho thiết bị: %s", key.c_str());
             nvs_close(nvs_handle);
             return false;
         }
@@ -211,6 +242,7 @@ private:
         uint8_t* ir_data = new uint8_t[required_size];
         err = nvs_get_blob(nvs_handle, key.c_str(), ir_data, &required_size);
         if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Đang phát lệnh IR từ NVS cho: %s (Kích thước: %d)", key.c_str(), required_size);
             SendCustomIrSignal(ir_data, required_size);
         }
 
@@ -220,29 +252,38 @@ private:
     }
 
     void InitializeInfrared() {
+        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
+
         gpio_config_t io_conf_tx = {};
+        io_conf_tx.intr_type = GPIO_INTR_DISABLE;
         io_conf_tx.mode = GPIO_MODE_OUTPUT;
         io_conf_tx.pin_bit_mask = (1ULL << IR_TRANSMITTER_GPIO);
+        io_conf_tx.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf_tx.pull_up_en = GPIO_PULLUP_DISABLE;
         gpio_config(&io_conf_tx);
         gpio_set_level(IR_TRANSMITTER_GPIO, 0);
 
         gpio_config_t io_conf_rx = {};
+        io_conf_rx.intr_type = GPIO_INTR_DISABLE;
         io_conf_rx.mode = GPIO_MODE_INPUT;
         io_conf_rx.pin_bit_mask = (1ULL << IR_RECEIVER_GPIO);
         io_conf_rx.pull_up_en = GPIO_PULLUP_ENABLE;
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
+        ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
     void StartLearningIr(const std::string& targetName) {
         is_learning_mode = true;
         active_learning_device_ = targetName;
         ir_raw_len = 0;
+        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH CHO: %s --- Hãy bấm remote!", targetName.c_str());
     }
 
     void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
+        ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
     }
 
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
@@ -272,6 +313,7 @@ private:
                     is_learning_mode = false;
                     saveIRCodeToNVS(active_learning_device_, (uint8_t*)ir_raw_intervals, ir_raw_len * sizeof(uint32_t));
                     last_captured_ir_code_ = active_learning_device_ + " (Xung: " + std::to_string(ir_raw_len) + ")";
+                    ESP_LOGI(TAG, ">>> HỌC VÀ LƯU XONG CHO: %s", active_learning_device_.c_str());
                     active_learning_device_ = "";
                     return true;
                 }
@@ -452,6 +494,19 @@ private:
                 }
                 return std::string("Không thể đọc độ ẩm");
             });
+
+        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                if (aht20_ && aht20_->calibrated && aht20_->initialized) {
+                    float temp, hum;
+                    if (ReadAHT20(&temp, &hum) == ESP_OK) {
+                        char buffer[64];
+                        snprintf(buffer, sizeof(buffer), "Nhiệt độ: %.1f°C, Độ ẩm: %.1f%%", temp, hum);
+                        return std::string(buffer);
+                    }
+                }
+                return std::string("Không thể đọc cảm biến");
+            });
     }
 
     // ==========================================
@@ -459,6 +514,12 @@ private:
     // ==========================================
     void UpdateDisplayAnimation() {
         if (!display_) return;
+
+        if (!is_license_valid_) {
+            display_->SetEmotion("X X");
+            display_->SetStatus("Het han ban quyen");
+            return;
+        }
 
         auto& app = Application::GetInstance();
         static uint32_t last_blink_time = 0;
@@ -506,6 +567,45 @@ private:
         return (int)((sin(phase) + 1) / 2 * 255);
     }
 
+    int HeartbeatEffect(uint32_t time_ms) {
+        uint32_t cycle = time_ms % 1000;
+        if (cycle < 100) return 255;
+        else if (cycle < 200) return 50;
+        else if (cycle < 300) return 255;
+        else if (cycle < 400) return 50;
+        else return 0;
+    }
+
+    int WaveEffect(uint32_t time_ms, int speed, int led_index) {
+        float period = 1500.0f / speed;
+        float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
+        float phase_offset = led_index == 0 ? 0 : 3.14159f;
+        return (int)((sin(phase + phase_offset) + 1) / 2 * 255);
+    }
+
+    int CometEffect(uint32_t time_ms, int speed, int led_index) {
+        int cycle_time = 3000 / speed;
+        int pos = (time_ms % cycle_time) * 255 / cycle_time;
+        int brightness = 0;
+        if (pos > 200) brightness = 255;
+        else if (pos > 150) brightness = (pos - 150) * 5;
+        return led_index == 0 ? brightness : brightness / 2;
+    }
+
+    int TwinkleEffect(uint32_t time_ms, int speed, int led_index) {
+        uint32_t seed = (time_ms / (200 / speed)) + led_index * 1000;
+        uint32_t random = (seed * 1103515245 + 12345) & 0x7fffffff;
+        return (random % 256) > 200 ? 255 : (random % 256) > 100 ? 128 : 0;
+    }
+
+    int PulseEffect(uint32_t time_ms, int speed, int led_index) {
+        int pulse_width = 200 / speed;
+        uint32_t cycle = time_ms % (pulse_width * 4);
+        if (cycle < pulse_width) return (cycle * 255) / pulse_width;
+        else if (cycle < pulse_width * 2) return 255 - ((cycle - pulse_width) * 255 / pulse_width);
+        else return 0;
+    }
+
     void ApplyLedEffect(int led_pin, LedAnimation anim) {
         if (!anim.active) {
             gpio_set_level((gpio_num_t)led_pin, 0);
@@ -517,16 +617,47 @@ private:
             case PATTERN_OFF: brightness = 0; break;
             case PATTERN_BREATH: brightness = BreathEffect(time, anim.speed); break;
             case PATTERN_BLINK_FAST: brightness = (time % (100 / anim.speed)) < 50 ? 255 : 0; break;
+            case PATTERN_BLINK_SLOW: brightness = (time % (500 / anim.speed)) < 250 ? 255 : 0; break;
+            case PATTERN_HEARTBEAT: brightness = HeartbeatEffect(time); break;
+            case PATTERN_WAVE: brightness = WaveEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+            case PATTERN_COMET: brightness = CometEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
+            case PATTERN_PULSE: brightness = PulseEffect(time, anim.speed, 0); break;
+            case PATTERN_TWINKLE: brightness = TwinkleEffect(time, anim.speed, led_pin == LED_1 ? 0 : 1); break;
             default: brightness = 0; break;
         }
         gpio_set_level((gpio_num_t)led_pin, brightness > 50 ? 1 : 0);
+    }
+
+    void SetLedTimeout(int duration_seconds) {
+        if (duration_seconds <= 0) led_timeout_ms_ = 0;
+        else {
+            led_timeout_ms_ = duration_seconds * 1000;
+            led_timeout_start_ = led_tick_;
+        }
     }
 
     void ExecuteEmotion(const std::string& emotion) {
         if (emotion == current_emotion_ && emotion_auto_mode_ == false) return;
         current_emotion_ = emotion;
         emotion_auto_mode_ = false;
+        
         ShowEmotionDisplay(emotion);
+        
+        if (emotion == "happy") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 5, 255, 0, true};
+            anim_led2_ = {PATTERN_BREATH, 5, 255, 0, true};
+            SetLedTimeout(5);
+        } else if (emotion == "sad") {
+            led_auto_mode_ = false;
+            anim_led1_ = {PATTERN_BREATH, 1, 255, 0, true};
+            anim_led2_ = {PATTERN_OFF, 0, 0, 0, false};
+            SetLedTimeout(5);
+        } else if (emotion == "neutral") {
+            led_auto_mode_ = true;
+            led_timeout_ms_ = 0;
+            emotion_auto_mode_ = true;
+        }
     }
 
     void UpdateEmotionByState() {
@@ -545,9 +676,26 @@ private:
         led_tick_ += 50;
         if (led_tick_ % 500 == 0) UpdateEmotionByState();
         
+        if (led_timeout_ms_ > 0) {
+            if (led_tick_ - led_timeout_start_ >= led_timeout_ms_) {
+                led_timeout_ms_ = 0;
+                led_auto_mode_ = true;
+                emotion_auto_mode_ = true;
+            }
+        }
+        
         if (led_auto_mode_) {
-            anim_led1_.pattern = PATTERN_BREATH; anim_led1_.speed = 3; anim_led1_.active = true;
-            anim_led2_.pattern = PATTERN_OFF; anim_led2_.active = false;
+            auto& app = Application::GetInstance();
+            switch (app.GetDeviceState()) {
+                case kDeviceStateIdle:
+                    anim_led1_.pattern = PATTERN_BREATH; anim_led1_.speed = 3; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_OFF; anim_led2_.active = false;
+                    break;
+                default:
+                    anim_led1_.pattern = PATTERN_BLINK_FAST; anim_led1_.speed = 12; anim_led1_.active = true;
+                    anim_led2_.pattern = PATTERN_BLINK_FAST; anim_led2_.speed = 12; anim_led2_.active = true;
+                    break;
+            }
         }
         ApplyLedEffect(LED_1, anim_led1_);
         ApplyLedEffect(LED_2, anim_led2_);
@@ -682,12 +830,14 @@ private:
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.motor.forward", "Robot tiến", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
+                if (!is_license_valid_) return "Thiết bị bị khóa bản quyền";
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed); SetRightMotor(speed);
                 return "Tiến " + std::to_string(speed) + "%";
             });
         mcp.AddTool("self.motor.backward", "Robot lùi", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
+                if (!is_license_valid_) return "Thiết bị bị khóa bản quyền";
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(-speed); SetRightMotor(-speed);
                 return "Lùi " + std::to_string(speed) + "%";
@@ -741,14 +891,6 @@ private:
                 int adc_value = 0;
                 adc_oneshot_read(adc_handle_, POWER_ADC_CHANNEL, &adc_value);
                 return std::to_string((adc_value * 100) / 4095) + "%";
-            });
-    }
-
-    void InitializeMacMcp() {
-        auto& mcp = McpServer::GetInstance();
-        mcp.AddTool("self.device.mac", "Lấy địa chỉ MAC của thiết bị", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                return std::string(getMacAddress().c_str());
             });
     }
 
@@ -816,18 +958,10 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
-        configTime(7 * 3600, 0, "pool.ntp.org", "time.nist.gov"); 
+        InitDisplay();
 
-        vTaskDelay(pdMS_TO_TICKS(1000));
-
-        if (!verifyLicense()) {
-            ESP_LOGE(TAG, "=========================================");
-            ESP_LOGE(TAG, "THIẾT BỊ BỊ KHÓA BẢN QUYỀN!");
-            ESP_LOGE(TAG, "=========================================");
-            while (true) {
-                vTaskDelay(pdMS_TO_TICKS(1000)); 
-            }
-        }
+        // ** GỌI KIỂM TRA BẢN QUYỀN VÀ TỰ CẤP TRIAL NGAY KHI KHỞI ĐỘNG **
+        CheckDeviceLicense();
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
@@ -841,7 +975,6 @@ public:
         InitializeVolumeMcp();
         InitializeAdc();
         InitializeBatteryMcp();
-        InitializeMacMcp();
 
         InitAHT20();
         InitializeAHT20Mcp();
@@ -854,7 +987,6 @@ public:
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
         xTaskCreate(IrTask, "ir_task", 4096, this, 4, nullptr);
 
-        InitDisplay();
         if (display_) ShowEmotionDisplay("neutral");
 
         InitializeButtons();
@@ -868,6 +1000,10 @@ public:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
+            if (!is_license_valid_) {
+                ESP_LOGW(TAG, "Thiết bị bị khóa do hết hạn bản quyền!");
+                return;
+            }
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
@@ -878,6 +1014,10 @@ public:
 #if CONFIG_TOUCH_SENSOR_ENABLED
         touch_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
+            if (!is_license_valid_) {
+                ESP_LOGW(TAG, "Thiết bị bị khóa do hết hạn bản quyền!");
+                return;
+            }
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
