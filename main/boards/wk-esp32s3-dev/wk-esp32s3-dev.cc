@@ -139,7 +139,8 @@ private:
 
     // Hàm thực hiện kiểm tra cập nhật OTA từ server Render
         void CheckAndPerformOta() {
-        std::string url = "https://esp32-428i.onrender.com/api/check-update?mac=" + device_mac_str_;
+        std::string url = "https://esp32-ota-server-9yuy.onrender.com/api/check-update?mac=" + device_mac_str_;
+
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
 
         std::string response_data = "";
