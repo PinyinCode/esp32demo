@@ -10,4 +10,9 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 idf_build_set_property(MINIMAL_BUILD ON)
 
 set(PROJECT_VER "2.4.2")
+
+# === BỔ SUNG DÒNG NÀY VÀO ĐÂY ===
+set(PARTITION_TABLE_FILE "partitions.csv")
+# ================================
+
 project(xiaozhi)
