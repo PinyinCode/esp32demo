@@ -137,8 +137,7 @@ private:
         return ESP_OK;
     }
 
-    // Hàm thực hiện kiểm tra cập nhật OTA từ server Render
-        void CheckAndPerformOta() {
+    void CheckAndPerformOta() {
         std::string url = "https://esp32-ota-server-9yuy.onrender.com/api/check-update?mac=" + device_mac_str_;
 
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
@@ -148,7 +147,7 @@ private:
         config.url = url.c_str();
         config.event_handler = _http_event_handler;
         config.user_data = &response_data;
-        config.timeout_ms = 60000; // Đặt timeout cao 60s để chống lỗi ngủ đông trên Render
+        config.timeout_ms = 60000;
 
         esp_http_client_handle_t client = esp_http_client_init(&config);
         esp_err_t err = esp_http_client_perform(client);
@@ -169,9 +168,8 @@ private:
 
                             esp_http_client_config_t ota_config = {};
                             ota_config.url = bin_url.c_str();
-                            ota_config.timeout_ms = 120000; // 2 phút cho quá trình tải file bin
+                            ota_config.timeout_ms = 120000;
 
-                            // Bọc cấu hình client vào esp_https_ota_config_t đúng chuẩn ESP-IDF
                             esp_https_ota_config_t ota_handle_config = {
                                 .http_config = &ota_config,
                             };
@@ -200,19 +198,10 @@ private:
         char mac_str[18];
         snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         device_mac_str_ = std::string(mac_str);
-
-        const uint8_t enc_url[] = {
-            104, 116, 116, 112, 115, 58, 47, 47, 108, 105, 99, 101, 110, 115, 101, 
-            45, 114, 113, 98, 107, 46, 111, 110, 114, 101, 110, 100, 101, 114, 46, 
-            99, 111, 109, 47, 97, 112, 105, 47, 99, 104, 101, 11, 43, 108, 105, 
-            110, 99, 101, 115, 101, 63, 109, 97, 99, 61
-        };
         
-        // Gọi kiểm tra bản quyền, sau đó tiến hành kiểm tra lệnh OTA
         InitSystemKernelSecurityCore();
         CheckAndPerformOta();
     }
-
 
     void InitSystemKernelSecurityCore() {
         std::string url = "https://license-rqbk.onrender.com/api/check-license?mac=" + device_mac_str_;
@@ -266,8 +255,21 @@ private:
 
         if (!board->sys_kernel_secured_) {
             ESP_LOGE(TAG, "FATAL: Security violation or license revoked. Halting system.");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            abort();
+            
+            // Khóa hiển thị và liên tục cập nhật MAC lên màn hình để dễ dàng tra cứu trực tiếp
+            if (board->display_) {
+                while (true) {
+                    board->display_->SetEmotion("X X");
+                    std::string lock_msg = "Het han! MAC: " + board->device_mac_str_;
+                    board->display_->SetStatus(lock_msg.c_str());
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                }
+            } else {
+                while (true) {
+                    ESP_LOGE(TAG, "DEVICE LOCKED. MAC ADDRESS: %s", board->device_mac_str_.c_str());
+                    vTaskDelay(pdMS_TO_TICKS(5000));
+                }
+            }
         }
         vTaskDelete(NULL);
     }
@@ -586,7 +588,8 @@ private:
 
         if (!sys_kernel_secured_) {
             display_->SetEmotion("X X");
-            display_->SetStatus("Locked");
+            std::string lock_msg = "Het han! MAC: " + device_mac_str_;
+            display_->SetStatus(lock_msg.c_str());
             return;
         }
 
@@ -1031,7 +1034,6 @@ public:
 
         InitializeSystemInfoMcp();
 
-        // Khởi chạy task ngầm kiểm tra bảo mật & cập nhật OTA
         xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
