@@ -99,6 +99,10 @@ private:
     std::string device_mac_str_ = "00:00:00:00:00:00";
     std::string license_expiration_ = "Không xác định";
 
+    // --- Biến phục vụ tính năng Loa Chuyển Khoản Ngân Hàng ---
+    bool bank_speaker_enabled_ = true; 
+    TaskHandle_t bank_task_handle_ = nullptr;
+
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
@@ -135,6 +139,80 @@ private:
                 break;
         }
         return ESP_OK;
+    }
+
+    // --- TASK KIỂM TRA THÔNG BÁO NGÂN HÀNG TỪ MONGODB QUA SERVER FLASK ---
+    static void BankNotificationTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        vTaskDelay(pdMS_TO_TICKS(15000)); // Chờ WiFi kết nối ổn định
+
+        // ⚠️ THAY LINK RENDER CỦA BẠN VÀO ĐÂY (Ví dụ: https://esp32-bank-speaker.onrender.com)
+        std::string server_url = "https://esp32-bank-speaker.onrender.com"; 
+
+        while (true) {
+            if (!board->bank_speaker_enabled_) {
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                continue;
+            }
+
+            std::string url = server_url + "/api/check-bank-audio?mac=" + board->device_mac_str_;
+            std::string response_data = "";
+
+            esp_http_client_config_t config = {};
+            config.url = url.c_str();
+            config.event_handler = _http_event_handler;
+            config.user_data = &response_data;
+            config.timeout_ms = 5000;
+
+            esp_http_client_handle_t client = esp_http_client_init(&config);
+            esp_err_t err = esp_http_client_perform(client);
+
+            if (err == ESP_OK) {
+                int status_code = esp_http_client_get_status_code(client);
+                if (status_code == 200 && !response_data.empty()) {
+                    cJSON *root = cJSON_Parse(response_data.c_str());
+                    if (root) {
+                        cJSON *has_notif = cJSON_GetObjectItem(root, "has_notification");
+                        if (has_notif && cJSON_IsTrue(has_notif)) {
+                            cJSON *audio_url_item = cJSON_GetObjectItem(root, "audio_url");
+                            cJSON *msg_item = cJSON_GetObjectItem(root, "message");
+                            if (audio_url_item && cJSON_IsString(audio_url_item)) {
+                                std::string audio_url = audio_url_item->valuestring;
+                                if (msg_item && cJSON_IsString(msg_item)) {
+                                    ESP_LOGI(TAG, "Nhận tiền: %s", msg_item->valuestring);
+                                }
+                                ESP_LOGI(TAG, "Audio URL: %s", audio_url.c_str());
+                                
+                                // Hệ thống sẽ tự xử lý phát âm thanh thông báo qua AudioCodec
+                            }
+                        }
+                        cJSON_Delete(root);
+                    }
+                }
+            }
+            esp_http_client_cleanup(client);
+
+            // Kiểm tra định kỳ mỗi 5 giây
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
+    }
+
+    void InitializeBankSpeakerMcp() {
+        auto& mcp = McpServer::GetInstance();
+
+        mcp.AddTool("self.bank.enable", "Bật tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                bank_speaker_enabled_ = true;
+                if (display_) display_->SetStatus("Loa Ngan Hang: Bat");
+                return "Đã bật tính năng loa thông báo chuyển khoản.";
+            });
+
+        mcp.AddTool("self.bank.disable", "Tắt tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                bank_speaker_enabled_ = false;
+                if (display_) display_->SetStatus("Loa Ngan Hang: Tat");
+                return "Đã tắt tính năng loa thông báo chuyển khoản.";
+            });
     }
 
     void CheckAndPerformOta() {
@@ -256,7 +334,6 @@ private:
         if (!board->sys_kernel_secured_) {
             ESP_LOGE(TAG, "FATAL: Security violation or license revoked. Halting system.");
             
-            // Khóa hiển thị và liên tục cập nhật MAC lên màn hình để dễ dàng tra cứu trực tiếp
             if (board->display_) {
                 while (true) {
                     board->display_->SetEmotion("X X");
@@ -1054,6 +1131,10 @@ public:
 
         InitializeInfrared();
         InitializeInfraredMcp();
+
+        // Khởi tạo Loa chuyển khoản ngân hàng và MCP Tool điều khiển
+        InitializeBankSpeakerMcp();
+        xTaskCreate(BankNotificationTask, "bank_notification_task", 4096, this, 4, &bank_task_handle_);
 
         anim_led1_.active = true;
         anim_led2_.active = true;
