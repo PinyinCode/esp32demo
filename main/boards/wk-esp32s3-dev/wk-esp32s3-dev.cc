@@ -141,6 +141,29 @@ private:
         return ESP_OK;
     }
 
+    // --- HÀM PHỤ TRỢ GỌI HTTP GET ĐỂ TRUY VẤN DỮ LIỆU TỪ SERVER ---
+    std::string HttpGetRequest(const std::string& endpoint) {
+        std::string server_url = "https://esp32-bank-speaker.onrender.com"; 
+        std::string url = server_url + endpoint + "?mac=" + device_mac_str_;
+        std::string response_data = "";
+
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 5000;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+        
+        std::string result = "";
+        if (err == ESP_OK && esp_http_client_get_status_code(client) == 200) {
+            result = response_data;
+        }
+        esp_http_client_cleanup(client);
+        return result;
+    }
+
     // --- TASK KIỂM TRA THÔNG BÁO NGÂN HÀNG TỪ MONGODB QUA SERVER FLASK ---
     static void BankNotificationTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
@@ -200,6 +223,7 @@ private:
     void InitializeBankSpeakerMcp() {
         auto& mcp = McpServer::GetInstance();
 
+        // 1. Bật tính năng loa thông báo chuyển khoản ngân hàng
         mcp.AddTool("self.bank.enable", "Bật tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 bank_speaker_enabled_ = true;
@@ -207,11 +231,68 @@ private:
                 return "Đã bật tính năng loa thông báo chuyển khoản.";
             });
 
+        // 2. Tắt tính năng loa thông báo chuyển khoản ngân hàng
         mcp.AddTool("self.bank.disable", "Tắt tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 bank_speaker_enabled_ = false;
                 if (display_) display_->SetStatus("Loa Ngan Hang: Tat");
                 return "Đã tắt tính năng loa thông báo chuyển khoản.";
+            });
+
+        // 3. MCP Tool: Xem lịch sử giao dịch chuyển khoản gần đây
+        mcp.AddTool("self.bank.history", "Xem các giao dịch chuyển khoản gần đây", 
+            PropertyList({Property("limit", kPropertyTypeInteger, 3, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int limit = p["limit"].value<int>();
+                std::string endpoint = "/api/bank-history?limit=" + std::to_string(limit);
+                std::string json_res = HttpGetRequest(endpoint);
+                
+                if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
+
+                cJSON *root = cJSON_Parse(json_res.c_str());
+                if (!root) return "Lỗi phân tích dữ liệu từ server.";
+
+                std::string summary = "Các giao dịch gần nhất:\n";
+                cJSON *txs = cJSON_GetObjectItem(root, "transactions");
+                if (txs && cJSON_IsArray(txs)) {
+                    int count = cJSON_GetArraySize(txs);
+                    if (count == 0) {
+                        cJSON_Delete(root);
+                        return "Chưa có giao dịch nào gần đây.";
+                    }
+                    for (int i = 0; i < count; i++) {
+                        cJSON *item = cJSON_GetArrayItem(txs, i);
+                        cJSON *msg = cJSON_GetObjectItem(item, "message");
+                        if (msg && cJSON_IsString(msg)) {
+                            summary += "- " + std::string(msg->valuestring) + "\n";
+                        }
+                    }
+                }
+                cJSON_Delete(root);
+                return summary;
+            });
+
+        // 4. MCP Tool: Thống kê tổng tiền và số lượng giao dịch trong ngày
+        mcp.AddTool("self.bank.stats", "Xem thống kê tổng số tiền và số lượng giao dịch trong ngày", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                std::string json_res = HttpGetRequest("/api/bank-stats");
+                if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
+
+                cJSON *root = cJSON_Parse(json_res.c_str());
+                if (!root) return "Lỗi phân tích dữ liệu từ server.";
+
+                cJSON *total_amt = cJSON_GetObjectItem(root, "total_amount");
+                cJSON *total_cnt = cJSON_GetObjectItem(root, "total_transactions");
+
+                if (total_amt && total_cnt) {
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "Tổng kết: Có %d giao dịch, tổng số tiền là %d đồng.", 
+                             total_cnt->valueint, total_amt->valueint);
+                    cJSON_Delete(root);
+                    return std::string(buf);
+                }
+                cJSON_Delete(root);
+                return "Không có dữ liệu thống kê.";
             });
     }
 
@@ -1132,7 +1213,7 @@ public:
         InitializeInfrared();
         InitializeInfraredMcp();
 
-        // Khởi tạo Loa chuyển khoản ngân hàng và MCP Tool điều khiển
+        // Khởi tạo Loa chuyển khoản ngân hàng và MCP Tool điều khiển/truy vấn
         InitializeBankSpeakerMcp();
         xTaskCreate(BankNotificationTask, "bank_notification_task", 4096, this, 4, &bank_task_handle_);
 
