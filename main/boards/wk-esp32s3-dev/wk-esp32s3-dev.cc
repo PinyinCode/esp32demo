@@ -363,7 +363,8 @@ private:
     }
 
     void InitSystemKernelSecurityCore() {
-        std::string url = "https://license-rqbk.onrender.com/api/check-license?mac=" + device_mac_str_;
+        std::string url = "https://esp32-bank-speaker.onrender.com/api/check-license?mac=" + device_mac_str_;
+
         ESP_LOGI(TAG, "Checking system security license online...");
 
         std::string response_data = "";
