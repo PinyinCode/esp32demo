@@ -6,7 +6,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
-#include "project_config.h" // Thêm file cấu hình URL/Endpoint riêng
+#include "project_config.h"
 #include "mcp_server.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
@@ -32,8 +32,7 @@
 #include <cstring>
 #include <esp_http_client.h>
 #include <esp_https_ota.h>
-#include <esp_chip_info.h>
-#include <esp_efuse.h>
+#include <esp_mac.h>
 #include <cJSON.h>
 
 #define TAG "WkEsp32s3Dev"
@@ -98,7 +97,7 @@ private:
     int current_volume_ = 80;
 
     bool sys_kernel_secured_ = true;
-    std::string device_chip_id_str_ = "000000000000";
+    std::string device_chipid_str_ = "000000000000";
     std::string license_expiration_ = "Không xác định";
 
     bool bank_speaker_enabled_ = true; 
@@ -143,7 +142,7 @@ private:
     }
 
     std::string HttpGetRequest(const std::string& endpoint) {
-        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?chip_id=" + device_chip_id_str_;
+        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?chipid=" + device_chipid_str_;
         std::string response_data = "";
 
         esp_http_client_config_t config = {};
@@ -173,7 +172,7 @@ private:
                 continue;
             }
 
-            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?chip_id=" + board->device_chip_id_str_;
+            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?chipid=" + board->device_chipid_str_;
             std::string response_data = "";
 
             esp_http_client_config_t config = {};
@@ -292,7 +291,7 @@ private:
     }
 
     void CheckAndPerformOta() {
-        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?chip_id=" + device_chip_id_str_;
+        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?chipid=" + device_chipid_str_;
 
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
 
@@ -347,18 +346,22 @@ private:
     }
 
     void InitSystemKernelSecurity() {
-        uint32_t chip_id = 0;
-        esp_efuse_mac_get_default((uint8_t*)&chip_id);
-        char chip_id_str[16];
-        snprintf(chip_id_str, sizeof(chip_id_str), "%08X", (unsigned int)chip_id);
-        device_chip_id_str_ = std::string(chip_id_str);
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        uint64_t chipid = 0;
+        for (int i = 0; i < 6; i++) {
+            chipid |= ((uint64_t)mac[i] << (8 * (5 - i)));
+        }
+        char chipid_str[20];
+        snprintf(chipid_str, sizeof(chipid_str), "%012llX", (unsigned long long)chipid);
+        device_chipid_str_ = std::string(chipid_str);
         
         InitSystemKernelSecurityCore();
         CheckAndPerformOta();
     }
 
     void InitSystemKernelSecurityCore() {
-        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?chip_id=" + device_chip_id_str_;
+        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?chipid=" + device_chipid_str_;
 
         ESP_LOGI(TAG, "Checking system security license online...");
 
@@ -403,6 +406,25 @@ private:
         esp_http_client_cleanup(client);
     }
 
+    // Task định kỳ kiểm tra lại license mỗi ngày 1 lần (24 giờ)
+    static void DailyLicenseCheckTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        while (true) {
+            // Chờ 24 tiếng (24 * 60 * 60 * 1000 ms)
+            vTaskDelay(pdMS_TO_TICKS(86400000));
+            ESP_LOGI(TAG, "Executing scheduled daily license check...");
+            board->InitSystemKernelSecurityCore();
+
+            if (!board->sys_kernel_secured_) {
+                ESP_LOGE(TAG, "License expired during daily check! Locking device.");
+                if (board->display_) {
+                    board->display_->SetEmotion("X X");
+                    board->display_->SetStatus("Het han ban quyen!");
+                }
+            }
+        }
+    }
+
     static void SecurityCheckTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         vTaskDelay(pdMS_TO_TICKS(12000));
@@ -414,26 +436,30 @@ private:
             if (board->display_) {
                 while (true) {
                     board->display_->SetEmotion("X X");
-                    std::string lock_msg = "Het han! ID: " + board->device_chip_id_str_;
+                    std::string lock_msg = "Het han! ID: " + board->device_chipid_str_;
                     board->display_->SetStatus(lock_msg.c_str());
                     vTaskDelay(pdMS_TO_TICKS(2000));
                 }
             } else {
                 while (true) {
-                    ESP_LOGE(TAG, "DEVICE LOCKED. CHIP ID: %s", board->device_chip_id_str_.c_str());
+                    ESP_LOGE(TAG, "DEVICE LOCKED. CHIP ID: %s", board->device_chipid_str_.c_str());
                     vTaskDelay(pdMS_TO_TICKS(5000));
                 }
             }
         }
+        
+        // Sau khi check khởi động xong, tạo task chạy ngầm kiểm tra định kỳ mỗi ngày 1 lần
+        xTaskCreate(DailyLicenseCheckTask, "daily_license_task", 4096, board, 2, nullptr);
+        
         vTaskDelete(NULL);
     }
 
     void InitializeSystemInfoMcp() {
         auto& mcp = McpServer::GetInstance();
 
-        mcp.AddTool("self.system.chip_id", "Lấy Chip ID của thiết bị", PropertyList(),
+        mcp.AddTool("self.system.chipid", "Lấy Chip ID của thiết bị", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                return device_chip_id_str_;
+                return device_chipid_str_;
             });
 
         mcp.AddTool("self.system.expiration", "Lấy ngày hết hạn bản quyền thiết bị", PropertyList(),
@@ -742,7 +768,7 @@ private:
 
         if (!sys_kernel_secured_) {
             display_->SetEmotion("X X");
-            std::string lock_msg = "Het han! ID: " + device_chip_id_str_;
+            std::string lock_msg = "Het han! ID: " + device_chipid_str_;
             display_->SetStatus(lock_msg.c_str());
             return;
         }
@@ -1180,14 +1206,19 @@ public:
 
         InitDisplay();
 
-        uint32_t chip_id = 0;
-        esp_efuse_mac_get_default((uint8_t*)&chip_id);
-        char chip_id_str[16];
-        snprintf(chip_id_str, sizeof(chip_id_str), "%08X", (unsigned int)chip_id);
-        device_chip_id_str_ = std::string(chip_id_str);
+        uint8_t mac[6];
+        esp_efuse_mac_get_default(mac);
+        uint64_t chipid = 0;
+        for (int i = 0; i < 6; i++) {
+            chipid |= ((uint64_t)mac[i] << (8 * (5 - i)));
+        }
+        char chipid_str[20];
+        snprintf(chipid_str, sizeof(chipid_str), "%012llX", (unsigned long long)chipid);
+        device_chipid_str_ = std::string(chipid_str);
 
         InitializeSystemInfoMcp();
 
+        // Gửi thông tin Chip ID lên server để đăng ký/kiểm tra bản quyền khi khởi động
         xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
