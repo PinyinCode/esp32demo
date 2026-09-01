@@ -6,7 +6,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
-#include "project_config.h"
+#include "project_config.h" // Thêm file cấu hình URL/Endpoint riêng
 #include "mcp_server.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
@@ -32,8 +32,8 @@
 #include <cstring>
 #include <esp_http_client.h>
 #include <esp_https_ota.h>
-#include <esp_efuse.h>
 #include <esp_chip_info.h>
+#include <esp_efuse.h>
 #include <cJSON.h>
 
 #define TAG "WkEsp32s3Dev"
@@ -98,7 +98,7 @@ private:
     int current_volume_ = 80;
 
     bool sys_kernel_secured_ = true;
-    std::string device_chip_id_str_ = "00000000"; 
+    std::string device_chip_id_str_ = "000000000000";
     std::string license_expiration_ = "Không xác định";
 
     bool bank_speaker_enabled_ = true; 
@@ -140,41 +140,6 @@ private:
                 break;
         }
         return ESP_OK;
-    }
-
-    // Hàm khởi tạo Chip ID độc lập hoàn toàn
-    void InitChipId() {
-        uint8_t base_id_bytes[6];
-        esp_efuse_mac_get_default(base_id_bytes);
-        char chip_id_buf[32];
-        uint32_t chip_id = 0;
-        for (int i = 3; i < 6; i++) {
-            chip_id = (chip_id << 8) | base_id_bytes[i];
-        }
-        snprintf(chip_id_buf, sizeof(chip_id_buf), "%08X", (unsigned int)chip_id);
-        device_chip_id_str_ = std::string(chip_id_buf);
-    }
-
-    void SendDeviceBootInfo() {
-        std::string url = std::string(SERVER_BASE_URL) + "/api/device/boot?chip_id=" + device_chip_id_str_;
-        
-        ESP_LOGI(TAG, "Sending boot info -> ChipID: %s", device_chip_id_str_.c_str());
-
-        std::string response_data = "";
-        esp_http_client_config_t config = {};
-        config.url = url.c_str();
-        config.event_handler = _http_event_handler;
-        config.user_data = &response_data;
-        config.timeout_ms = 5000;
-
-        esp_http_client_handle_t client = esp_http_client_init(&config);
-        esp_err_t err = esp_http_client_perform(client);
-        if (err == ESP_OK) {
-            ESP_LOGI(TAG, "Boot info sent successfully. Status = %d", esp_http_client_get_status_code(client));
-        } else {
-            ESP_LOGW(TAG, "Failed to send boot info: %s", esp_err_to_name(err));
-        }
-        esp_http_client_cleanup(client);
     }
 
     std::string HttpGetRequest(const std::string& endpoint) {
@@ -382,7 +347,12 @@ private:
     }
 
     void InitSystemKernelSecurity() {
-        InitChipId();
+        uint32_t chip_id = 0;
+        esp_efuse_mac_get_default((uint8_t*)&chip_id);
+        char chip_id_str[16];
+        snprintf(chip_id_str, sizeof(chip_id_str), "%08X", (unsigned int)chip_id);
+        device_chip_id_str_ = std::string(chip_id_str);
+        
         InitSystemKernelSecurityCore();
         CheckAndPerformOta();
     }
@@ -1210,9 +1180,11 @@ public:
 
         InitDisplay();
 
-        // Khởi tạo Chip ID duy nhất thay thế hoàn toàn MAC
-        InitChipId();
-        SendDeviceBootInfo();
+        uint32_t chip_id = 0;
+        esp_efuse_mac_get_default((uint8_t*)&chip_id);
+        char chip_id_str[16];
+        snprintf(chip_id_str, sizeof(chip_id_str), "%08X", (unsigned int)chip_id);
+        device_chip_id_str_ = std::string(chip_id_str);
 
         InitializeSystemInfoMcp();
 
