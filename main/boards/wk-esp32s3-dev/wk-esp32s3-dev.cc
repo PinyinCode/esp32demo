@@ -406,11 +406,9 @@ private:
         esp_http_client_cleanup(client);
     }
 
-    // Task định kỳ kiểm tra lại license mỗi ngày 1 lần (24 giờ)
     static void DailyLicenseCheckTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         while (true) {
-            // Chờ 24 tiếng (24 * 60 * 60 * 1000 ms)
             vTaskDelay(pdMS_TO_TICKS(86400000));
             ESP_LOGI(TAG, "Executing scheduled daily license check...");
             board->InitSystemKernelSecurityCore();
@@ -448,9 +446,7 @@ private:
             }
         }
         
-        // Sau khi check khởi động xong, tạo task chạy ngầm kiểm tra định kỳ mỗi ngày 1 lần
         xTaskCreate(DailyLicenseCheckTask, "daily_license_task", 4096, board, 2, nullptr);
-        
         vTaskDelete(NULL);
     }
 
@@ -1218,7 +1214,6 @@ public:
 
         InitializeSystemInfoMcp();
 
-        // Gửi thông tin Chip ID lên server để đăng ký/kiểm tra bản quyền khi khởi động
         xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
 
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
