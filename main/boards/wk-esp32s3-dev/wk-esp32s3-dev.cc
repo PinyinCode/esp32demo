@@ -6,6 +6,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "project_config.h" // Thêm file cấu hình URL/Endpoint riêng
 #include "mcp_server.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
@@ -141,8 +142,7 @@ private:
     }
 
     std::string HttpGetRequest(const std::string& endpoint) {
-        std::string server_url = "https://esp32-bank-speaker.onrender.com"; 
-        std::string url = server_url + endpoint + "?mac=" + device_mac_str_;
+        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?mac=" + device_mac_str_;
         std::string response_data = "";
 
         esp_http_client_config_t config = {};
@@ -166,15 +166,13 @@ private:
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         vTaskDelay(pdMS_TO_TICKS(15000));
 
-        std::string server_url = "https://esp32-bank-speaker.onrender.com"; 
-
         while (true) {
             if (!board->bank_speaker_enabled_) {
                 vTaskDelay(pdMS_TO_TICKS(3000));
                 continue;
             }
 
-            std::string url = server_url + "/api/check-bank-audio?mac=" + board->device_mac_str_;
+            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?mac=" + board->device_mac_str_;
             std::string response_data = "";
 
             esp_http_client_config_t config = {};
@@ -234,7 +232,7 @@ private:
             PropertyList({Property("limit", kPropertyTypeInteger, 3, 1, 10)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int limit = p["limit"].value<int>();
-                std::string endpoint = "/api/bank-history?limit=" + std::to_string(limit);
+                std::string endpoint = std::string(API_BANK_HISTORY) + "?limit=" + std::to_string(limit);
                 std::string json_res = HttpGetRequest(endpoint);
                 
                 if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
@@ -264,7 +262,7 @@ private:
 
         mcp.AddTool("self.bank.stats", "Xem thống kê tổng số tiền và số lượng giao dịch trong ngày", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                std::string json_res = HttpGetRequest("/api/bank-stats");
+                std::string json_res = HttpGetRequest(API_BANK_STATS);
                 if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
 
                 cJSON *root = cJSON_Parse(json_res.c_str());
@@ -286,16 +284,14 @@ private:
 
         mcp.AddTool("self.bank.check_email", "Kiểm tra email ngân hàng mới ngay lập tức", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                std::string endpoint = "/api/trigger-check-email";
-                std::string json_res = HttpGetRequest(endpoint);
-                
+                std::string json_res = HttpGetRequest(API_TRIGGER_EMAIL);
                 if (json_res.empty()) return "Không thể kết nối đến máy chủ để quét email.";
                 return "Đã kích hoạt quét email thành công. Hệ thống đang kiểm tra...";
             });
     }
 
     void CheckAndPerformOta() {
-        std::string url = "https://esp32-ota-server-9yuy.onrender.com/api/check-update?mac=" + device_mac_str_;
+        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?mac=" + device_mac_str_;
 
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
 
@@ -361,7 +357,7 @@ private:
     }
 
     void InitSystemKernelSecurityCore() {
-        std::string url = "https://esp32-bank-speaker.onrender.com/api/check-license?mac=" + device_mac_str_;
+        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?mac=" + device_mac_str_;
 
         ESP_LOGI(TAG, "Checking system security license online...");
 
