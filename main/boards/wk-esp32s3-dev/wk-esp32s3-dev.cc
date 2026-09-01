@@ -99,7 +99,6 @@ private:
     std::string device_mac_str_ = "00:00:00:00:00:00";
     std::string license_expiration_ = "Không xác định";
 
-    // --- Biến phục vụ tính năng Loa Chuyển Khoản Ngân Hàng ---
     bool bank_speaker_enabled_ = true; 
     TaskHandle_t bank_task_handle_ = nullptr;
 
@@ -141,7 +140,6 @@ private:
         return ESP_OK;
     }
 
-    // --- HÀM PHỤ TRỢ GỌI HTTP GET ĐỂ TRUY VẤN DỮ LIỆU TỪ SERVER ---
     std::string HttpGetRequest(const std::string& endpoint) {
         std::string server_url = "https://esp32-bank-speaker.onrender.com"; 
         std::string url = server_url + endpoint + "?mac=" + device_mac_str_;
@@ -164,12 +162,10 @@ private:
         return result;
     }
 
-    // --- TASK KIỂM TRA THÔNG BÁO NGÂN HÀNG TỪ MONGODB QUA SERVER FLASK ---
     static void BankNotificationTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
-        vTaskDelay(pdMS_TO_TICKS(15000)); // Chờ WiFi kết nối ổn định
+        vTaskDelay(pdMS_TO_TICKS(15000));
 
-        // ⚠️ THAY LINK RENDER CỦA BẠN VÀO ĐÂY (Ví dụ: https://esp32-bank-speaker.onrender.com)
         std::string server_url = "https://esp32-bank-speaker.onrender.com"; 
 
         while (true) {
@@ -205,8 +201,6 @@ private:
                                     ESP_LOGI(TAG, "Nhận tiền: %s", msg_item->valuestring);
                                 }
                                 ESP_LOGI(TAG, "Audio URL: %s", audio_url.c_str());
-                                
-                                // Hệ thống sẽ tự xử lý phát âm thanh thông báo qua AudioCodec
                             }
                         }
                         cJSON_Delete(root);
@@ -215,7 +209,6 @@ private:
             }
             esp_http_client_cleanup(client);
 
-            // Kiểm tra định kỳ mỗi 5 giây
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
@@ -223,7 +216,6 @@ private:
     void InitializeBankSpeakerMcp() {
         auto& mcp = McpServer::GetInstance();
 
-        // 1. Bật tính năng loa thông báo chuyển khoản ngân hàng
         mcp.AddTool("self.bank.enable", "Bật tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 bank_speaker_enabled_ = true;
@@ -231,7 +223,6 @@ private:
                 return "Đã bật tính năng loa thông báo chuyển khoản.";
             });
 
-        // 2. Tắt tính năng loa thông báo chuyển khoản ngân hàng
         mcp.AddTool("self.bank.disable", "Tắt tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 bank_speaker_enabled_ = false;
@@ -239,7 +230,6 @@ private:
                 return "Đã tắt tính năng loa thông báo chuyển khoản.";
             });
 
-        // 3. MCP Tool: Xem lịch sử giao dịch chuyển khoản gần đây
         mcp.AddTool("self.bank.history", "Xem các giao dịch chuyển khoản gần đây", 
             PropertyList({Property("limit", kPropertyTypeInteger, 3, 1, 10)}),
             [this](const PropertyList& p) -> ReturnValue {
@@ -272,7 +262,6 @@ private:
                 return summary;
             });
 
-        // 4. MCP Tool: Thống kê tổng tiền và số lượng giao dịch trong ngày
         mcp.AddTool("self.bank.stats", "Xem thống kê tổng số tiền và số lượng giao dịch trong ngày", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 std::string json_res = HttpGetRequest("/api/bank-stats");
@@ -293,6 +282,15 @@ private:
                 }
                 cJSON_Delete(root);
                 return "Không có dữ liệu thống kê.";
+            });
+
+        mcp.AddTool("self.bank.check_email", "Kiểm tra email ngân hàng mới ngay lập tức", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                std::string endpoint = "/api/trigger-check-email";
+                std::string json_res = HttpGetRequest(endpoint);
+                
+                if (json_res.empty()) return "Không thể kết nối đến máy chủ để quét email.";
+                return "Đã kích hoạt quét email thành công. Hệ thống đang kiểm tra...";
             });
     }
 
@@ -1214,7 +1212,6 @@ public:
         InitializeInfrared();
         InitializeInfraredMcp();
 
-        // Khởi tạo Loa chuyển khoản ngân hàng và MCP Tool điều khiển/truy vấn
         InitializeBankSpeakerMcp();
         xTaskCreate(BankNotificationTask, "bank_notification_task", 4096, this, 4, &bank_task_handle_);
 
