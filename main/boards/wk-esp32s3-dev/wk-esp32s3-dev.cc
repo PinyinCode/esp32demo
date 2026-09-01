@@ -199,7 +199,7 @@ private:
         return result;
     }
 
-    static void BankNotificationTask(void* arg) {
+        static void BankNotificationTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         vTaskDelay(pdMS_TO_TICKS(15000));
 
@@ -209,6 +209,7 @@ private:
                 continue;
             }
 
+            // Chỉ check dựa vào MAC theo đúng yêu cầu
             std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?mac=" + board->device_mac_str_;
             std::string response_data = "";
 
@@ -247,6 +248,7 @@ private:
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
+
 
     void InitializeBankSpeakerMcp() {
         auto& mcp = McpServer::GetInstance();
