@@ -33,6 +33,7 @@
 #include <esp_http_client.h>
 #include <esp_https_ota.h>
 #include <esp_mac.h>
+#include <esp_chip_info.h> // Thêm thư viện để lấy Chip ID
 #include <cJSON.h>
 
 #define TAG "WkEsp32s3Dev"
@@ -98,6 +99,7 @@ private:
 
     bool sys_kernel_secured_ = true;
     std::string device_mac_str_ = "00:00:00:00:00:00";
+    std::string device_chip_id_str_ = ""; // Biến lưu Chip ID
     std::string license_expiration_ = "Không xác định";
 
     bool bank_speaker_enabled_ = true; 
@@ -139,6 +141,41 @@ private:
                 break;
         }
         return ESP_OK;
+    }
+
+    // Hàm gửi MAC và Chip ID ngay khi khởi động lên hệ thống
+    void SendDeviceBootInfo() {
+        // Lấy Chip ID từ địa chỉ MAC hoặc chip efuse
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char chip_id_buf[32];
+        uint32_t chip_id = 0;
+        for (int i = 3; i < 6; i++) {
+            chip_id = (chip_id << 8) | mac[i];
+        }
+        snprintf(chip_id_buf, sizeof(chip_id_buf), "%08X", (unsigned int)chip_id);
+        device_chip_id_str_ = std::string(chip_id_buf);
+
+        // Tạo URL gửi dữ liệu lên endpoint (có thể dùng chung API check license hoặc tạo endpoint riêng)
+        std::string url = std::string(SERVER_BASE_URL) + "/api/device/boot?mac=" + device_mac_str_ + "&chip_id=" + device_chip_id_str_;
+        
+        ESP_LOGI(TAG, "Sending boot info -> MAC: %s, ChipID: %s", device_mac_str_.c_str(), device_chip_id_str_.c_str());
+
+        std::string response_data = "";
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 5000;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+        if (err == ESP_OK) {
+            ESP_LOGI(TAG, "Boot info sent successfully. Status = %d", esp_http_client_get_status_code(client));
+        } else {
+            ESP_LOGW(TAG, "Failed to send boot info: %s", esp_err_to_name(err));
+        }
+        esp_http_client_cleanup(client);
     }
 
     std::string HttpGetRequest(const std::string& endpoint) {
@@ -433,6 +470,11 @@ private:
         mcp.AddTool("self.system.mac", "Lấy địa chỉ MAC của thiết bị", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 return device_mac_str_;
+            });
+
+        mcp.AddTool("self.system.chip_id", "Lấy Chip ID của thiết bị", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return device_chip_id_str_;
             });
 
         mcp.AddTool("self.system.expiration", "Lấy ngày hết hạn bản quyền thiết bị", PropertyList(),
@@ -1184,6 +1226,9 @@ public:
         char mac_str[18];
         snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
         device_mac_str_ = std::string(mac_str);
+
+        // Gọi ngay hàm gửi MAC và Chip ID lên hệ thống khi khởi động
+        SendDeviceBootInfo();
 
         InitializeSystemInfoMcp();
 
