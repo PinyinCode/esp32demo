@@ -6,7 +6,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
-#include "project_config.h" // Thêm file cấu hình URL/Endpoint riêng
+#include "project_config.h"
 #include "mcp_server.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
@@ -32,8 +32,8 @@
 #include <cstring>
 #include <esp_http_client.h>
 #include <esp_https_ota.h>
-#include <esp_mac.h>
-#include <esp_chip_info.h> // Thêm thư viện để lấy Chip ID
+#include <esp_efuse.h>
+#include <esp_chip_info.h>
 #include <cJSON.h>
 
 #define TAG "WkEsp32s3Dev"
@@ -98,8 +98,7 @@ private:
     int current_volume_ = 80;
 
     bool sys_kernel_secured_ = true;
-    std::string device_mac_str_ = "00:00:00:00:00:00";
-    std::string device_chip_id_str_ = ""; // Biến lưu Chip ID
+    std::string device_chip_id_str_ = "00000000"; 
     std::string license_expiration_ = "Không xác định";
 
     bool bank_speaker_enabled_ = true; 
@@ -143,23 +142,23 @@ private:
         return ESP_OK;
     }
 
-    // Hàm gửi MAC và Chip ID ngay khi khởi động lên hệ thống
-    void SendDeviceBootInfo() {
-        // Lấy Chip ID từ địa chỉ MAC hoặc chip efuse
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    // Hàm khởi tạo Chip ID độc lập hoàn toàn
+    void InitChipId() {
+        uint8_t base_id_bytes[6];
+        esp_efuse_mac_get_default(base_id_bytes);
         char chip_id_buf[32];
         uint32_t chip_id = 0;
         for (int i = 3; i < 6; i++) {
-            chip_id = (chip_id << 8) | mac[i];
+            chip_id = (chip_id << 8) | base_id_bytes[i];
         }
         snprintf(chip_id_buf, sizeof(chip_id_buf), "%08X", (unsigned int)chip_id);
         device_chip_id_str_ = std::string(chip_id_buf);
+    }
 
-        // Tạo URL gửi dữ liệu lên endpoint (có thể dùng chung API check license hoặc tạo endpoint riêng)
-        std::string url = std::string(SERVER_BASE_URL) + "/api/device/boot?mac=" + device_mac_str_ + "&chip_id=" + device_chip_id_str_;
+    void SendDeviceBootInfo() {
+        std::string url = std::string(SERVER_BASE_URL) + "/api/device/boot?chip_id=" + device_chip_id_str_;
         
-        ESP_LOGI(TAG, "Sending boot info -> MAC: %s, ChipID: %s", device_mac_str_.c_str(), device_chip_id_str_.c_str());
+        ESP_LOGI(TAG, "Sending boot info -> ChipID: %s", device_chip_id_str_.c_str());
 
         std::string response_data = "";
         esp_http_client_config_t config = {};
@@ -179,7 +178,7 @@ private:
     }
 
     std::string HttpGetRequest(const std::string& endpoint) {
-        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?mac=" + device_mac_str_;
+        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?chip_id=" + device_chip_id_str_;
         std::string response_data = "";
 
         esp_http_client_config_t config = {};
@@ -199,7 +198,7 @@ private:
         return result;
     }
 
-        static void BankNotificationTask(void* arg) {
+    static void BankNotificationTask(void* arg) {
         auto* board = static_cast<WkEsp32s3Dev*>(arg);
         vTaskDelay(pdMS_TO_TICKS(15000));
 
@@ -209,8 +208,7 @@ private:
                 continue;
             }
 
-            // Chỉ check dựa vào MAC theo đúng yêu cầu
-            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?mac=" + board->device_mac_str_;
+            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?chip_id=" + board->device_chip_id_str_;
             std::string response_data = "";
 
             esp_http_client_config_t config = {};
@@ -248,7 +246,6 @@ private:
             vTaskDelay(pdMS_TO_TICKS(5000));
         }
     }
-
 
     void InitializeBankSpeakerMcp() {
         auto& mcp = McpServer::GetInstance();
@@ -330,7 +327,7 @@ private:
     }
 
     void CheckAndPerformOta() {
-        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?mac=" + device_mac_str_;
+        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?chip_id=" + device_chip_id_str_;
 
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
 
@@ -385,18 +382,13 @@ private:
     }
 
     void InitSystemKernelSecurity() {
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        char mac_str[18];
-        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        device_mac_str_ = std::string(mac_str);
-        
+        InitChipId();
         InitSystemKernelSecurityCore();
         CheckAndPerformOta();
     }
 
     void InitSystemKernelSecurityCore() {
-        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?mac=" + device_mac_str_;
+        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?chip_id=" + device_chip_id_str_;
 
         ESP_LOGI(TAG, "Checking system security license online...");
 
@@ -452,13 +444,13 @@ private:
             if (board->display_) {
                 while (true) {
                     board->display_->SetEmotion("X X");
-                    std::string lock_msg = "Het han! MAC: " + board->device_mac_str_;
+                    std::string lock_msg = "Het han! ID: " + board->device_chip_id_str_;
                     board->display_->SetStatus(lock_msg.c_str());
                     vTaskDelay(pdMS_TO_TICKS(2000));
                 }
             } else {
                 while (true) {
-                    ESP_LOGE(TAG, "DEVICE LOCKED. MAC ADDRESS: %s", board->device_mac_str_.c_str());
+                    ESP_LOGE(TAG, "DEVICE LOCKED. CHIP ID: %s", board->device_chip_id_str_.c_str());
                     vTaskDelay(pdMS_TO_TICKS(5000));
                 }
             }
@@ -468,11 +460,6 @@ private:
 
     void InitializeSystemInfoMcp() {
         auto& mcp = McpServer::GetInstance();
-
-        mcp.AddTool("self.system.mac", "Lấy địa chỉ MAC của thiết bị", PropertyList(),
-            [this](const PropertyList& p) -> ReturnValue {
-                return device_mac_str_;
-            });
 
         mcp.AddTool("self.system.chip_id", "Lấy Chip ID của thiết bị", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
@@ -785,7 +772,7 @@ private:
 
         if (!sys_kernel_secured_) {
             display_->SetEmotion("X X");
-            std::string lock_msg = "Het han! MAC: " + device_mac_str_;
+            std::string lock_msg = "Het han! ID: " + device_chip_id_str_;
             display_->SetStatus(lock_msg.c_str());
             return;
         }
@@ -1223,13 +1210,8 @@ public:
 
         InitDisplay();
 
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        char mac_str[18];
-        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-        device_mac_str_ = std::string(mac_str);
-
-        // Gọi ngay hàm gửi MAC và Chip ID lên hệ thống khi khởi động
+        // Khởi tạo Chip ID duy nhất thay thế hoàn toàn MAC
+        InitChipId();
         SendDeviceBootInfo();
 
         InitializeSystemInfoMcp();
