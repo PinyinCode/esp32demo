@@ -6,6 +6,7 @@
 #include "application.h"
 #include "button.h"
 #include "config.h"
+#include "project_config.h" // Thêm file cấu hình URL/Endpoint riêng
 #include "mcp_server.h"
 #include "led/single_led.h"
 #include "assets/lang_config.h"
@@ -23,22 +24,26 @@
 #include <esp_adc/adc_oneshot.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <nvs_flash.h>
+#include <nvs.h>
 #include <math.h>
 #include <algorithm>
 #include <string>
 #include <cstring>
+#include <esp_http_client.h>
+#include <esp_https_ota.h>
+#include <esp_mac.h>
+#include <cJSON.h>
 
 #define TAG "WkEsp32s3Dev"
 
 class WkEsp32s3Dev;
 
-// ===== AHT20 DEFINITIONS =====
 #define AHT20_CMD_CALIBRATE    0xBE
 #define AHT20_CMD_TRIGGER      0xAC
 #define AHT20_CMD_SOFT_RESET   0xBA
 #define AHT20_I2C_PORT         I2C_NUM_1
 
-// ===== TOF I2C DEFINITIONS =====
 #define TOF_I2C_PORT           I2C_NUM_0
 #define TOF_I2C_ADDR           0x29
 
@@ -50,13 +55,11 @@ typedef struct {
     uint32_t last_read_ms;
 } aht20_handle_t;
 
-// ===== SENSOR CONTROLLER =====
 class SensorController {
 public:
     SensorController(WkEsp32s3Dev* board);
 };
 
-// ===== LED PATTERNS =====
 enum LedPattern {
     PATTERN_OFF = 0,
     PATTERN_BREATH,
@@ -83,7 +86,6 @@ private:
     Button touch_button_;
     Display* display_ = nullptr;
     
-    // ===== DISPLAY VARIABLES =====
     esp_lcd_panel_io_handle_t panel_io_ = nullptr;
     esp_lcd_panel_handle_t panel_ = nullptr;
     
@@ -94,16 +96,22 @@ private:
     AudioCodec* audio_codec_ = nullptr;
     int current_volume_ = 80;
 
-    // ===== AHT20 VARIABLES =====
+    bool sys_kernel_secured_ = true;
+    std::string device_mac_str_ = "00:00:00:00:00:00";
+    std::string license_expiration_ = "Không xác định";
+
+    bool bank_speaker_enabled_ = true; 
+    TaskHandle_t bank_task_handle_ = nullptr;
+
     aht20_handle_t* aht20_ = nullptr;
     const int SENSOR_READ_INTERVAL_MS = 2000;
 
-    // ===== HỒNG NGOẠI (IR) & HỌC LỆNH VARIABLES =====
     std::string last_captured_ir_code_ = "Chưa có";
     bool ir_initialized_ = false;
     uint32_t ir_raw_intervals[150];
     int ir_raw_len = 0;
     bool is_learning_mode = false;
+    std::string active_learning_device_ = "";
 
     LedAnimation anim_led1_ = {PATTERN_OFF, 5, 255, 0, false};
     LedAnimation anim_led2_ = {PATTERN_OFF, 5, 255, 0, false};
@@ -119,18 +127,373 @@ private:
 
     friend class SensorController;
 
-    // ==========================================
-    //  HỒNG NGOẠI (IR) & HỌC LỆNH FUNCTIONS & MCP
-    // ==========================================
-    void InitializeInfrared() {
-        ESP_LOGI(TAG, "Initializing Custom Infrared (IR) module with Learning feature...");
+    static esp_err_t _http_event_handler(esp_http_client_event_t *evt) {
+        switch(evt->event_id) {
+            case HTTP_EVENT_ON_DATA:
+                if (evt->user_data) {
+                    std::string* output = (std::string*)evt->user_data;
+                    output->append((char*)evt->data, evt->data_len);
+                }
+                break;
+            default:
+                break;
+        }
+        return ESP_OK;
+    }
 
+    std::string HttpGetRequest(const std::string& endpoint) {
+        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?mac=" + device_mac_str_;
+        std::string response_data = "";
+
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 5000;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+        
+        std::string result = "";
+        if (err == ESP_OK && esp_http_client_get_status_code(client) == 200) {
+            result = response_data;
+        }
+        esp_http_client_cleanup(client);
+        return result;
+    }
+
+    static void BankNotificationTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        vTaskDelay(pdMS_TO_TICKS(15000));
+
+        while (true) {
+            if (!board->bank_speaker_enabled_) {
+                vTaskDelay(pdMS_TO_TICKS(3000));
+                continue;
+            }
+
+            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?mac=" + board->device_mac_str_;
+            std::string response_data = "";
+
+            esp_http_client_config_t config = {};
+            config.url = url.c_str();
+            config.event_handler = _http_event_handler;
+            config.user_data = &response_data;
+            config.timeout_ms = 5000;
+
+            esp_http_client_handle_t client = esp_http_client_init(&config);
+            esp_err_t err = esp_http_client_perform(client);
+
+            if (err == ESP_OK) {
+                int status_code = esp_http_client_get_status_code(client);
+                if (status_code == 200 && !response_data.empty()) {
+                    cJSON *root = cJSON_Parse(response_data.c_str());
+                    if (root) {
+                        cJSON *has_notif = cJSON_GetObjectItem(root, "has_notification");
+                        if (has_notif && cJSON_IsTrue(has_notif)) {
+                            cJSON *audio_url_item = cJSON_GetObjectItem(root, "audio_url");
+                            cJSON *msg_item = cJSON_GetObjectItem(root, "message");
+                            if (audio_url_item && cJSON_IsString(audio_url_item)) {
+                                std::string audio_url = audio_url_item->valuestring;
+                                if (msg_item && cJSON_IsString(msg_item)) {
+                                    ESP_LOGI(TAG, "Nhận tiền: %s", msg_item->valuestring);
+                                }
+                                ESP_LOGI(TAG, "Audio URL: %s", audio_url.c_str());
+                            }
+                        }
+                        cJSON_Delete(root);
+                    }
+                }
+            }
+            esp_http_client_cleanup(client);
+
+            vTaskDelay(pdMS_TO_TICKS(5000));
+        }
+    }
+
+    void InitializeBankSpeakerMcp() {
+        auto& mcp = McpServer::GetInstance();
+
+        mcp.AddTool("self.bank.enable", "Bật tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                bank_speaker_enabled_ = true;
+                if (display_) display_->SetStatus("Loa Ngan Hang: Bat");
+                return "Đã bật tính năng loa thông báo chuyển khoản.";
+            });
+
+        mcp.AddTool("self.bank.disable", "Tắt tính năng loa thông báo chuyển khoản ngân hàng", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                bank_speaker_enabled_ = false;
+                if (display_) display_->SetStatus("Loa Ngan Hang: Tat");
+                return "Đã tắt tính năng loa thông báo chuyển khoản.";
+            });
+
+        mcp.AddTool("self.bank.history", "Xem các giao dịch chuyển khoản gần đây", 
+            PropertyList({Property("limit", kPropertyTypeInteger, 3, 1, 10)}),
+            [this](const PropertyList& p) -> ReturnValue {
+                int limit = p["limit"].value<int>();
+                std::string endpoint = std::string(API_BANK_HISTORY) + "?limit=" + std::to_string(limit);
+                std::string json_res = HttpGetRequest(endpoint);
+                
+                if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
+
+                cJSON *root = cJSON_Parse(json_res.c_str());
+                if (!root) return "Lỗi phân tích dữ liệu từ server.";
+
+                std::string summary = "Các giao dịch gần nhất:\n";
+                cJSON *txs = cJSON_GetObjectItem(root, "transactions");
+                if (txs && cJSON_IsArray(txs)) {
+                    int count = cJSON_GetArraySize(txs);
+                    if (count == 0) {
+                        cJSON_Delete(root);
+                        return "Chưa có giao dịch nào gần đây.";
+                    }
+                    for (int i = 0; i < count; i++) {
+                        cJSON *item = cJSON_GetArrayItem(txs, i);
+                        cJSON *msg = cJSON_GetObjectItem(item, "message");
+                        if (msg && cJSON_IsString(msg)) {
+                            summary += "- " + std::string(msg->valuestring) + "\n";
+                        }
+                    }
+                }
+                cJSON_Delete(root);
+                return summary;
+            });
+
+        mcp.AddTool("self.bank.stats", "Xem thống kê tổng số tiền và số lượng giao dịch trong ngày", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                std::string json_res = HttpGetRequest(API_BANK_STATS);
+                if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
+
+                cJSON *root = cJSON_Parse(json_res.c_str());
+                if (!root) return "Lỗi phân tích dữ liệu từ server.";
+
+                cJSON *total_amt = cJSON_GetObjectItem(root, "total_amount");
+                cJSON *total_cnt = cJSON_GetObjectItem(root, "total_transactions");
+
+                if (total_amt && total_cnt) {
+                    char buf[128];
+                    snprintf(buf, sizeof(buf), "Tổng kết: Có %d giao dịch, tổng số tiền là %d đồng.", 
+                             total_cnt->valueint, total_amt->valueint);
+                    cJSON_Delete(root);
+                    return std::string(buf);
+                }
+                cJSON_Delete(root);
+                return "Không có dữ liệu thống kê.";
+            });
+
+        mcp.AddTool("self.bank.check_email", "Kiểm tra email ngân hàng mới ngay lập tức", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                std::string json_res = HttpGetRequest(API_TRIGGER_EMAIL);
+                if (json_res.empty()) return "Không thể kết nối đến máy chủ để quét email.";
+                return "Đã kích hoạt quét email thành công. Hệ thống đang kiểm tra...";
+            });
+    }
+
+    void CheckAndPerformOta() {
+        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?mac=" + device_mac_str_;
+
+        ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
+
+        std::string response_data = "";
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 60000;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+
+        if (err == ESP_OK) {
+            int status_code = esp_http_client_get_status_code(client);
+            if (status_code == 200) {
+                cJSON *root = cJSON_Parse(response_data.c_str());
+                if (root) {
+                    cJSON *update_avail = cJSON_GetObjectItem(root, "update_available");
+                    if (update_avail && cJSON_IsTrue(update_avail)) {
+                        cJSON *firmware_url = cJSON_GetObjectItem(root, "firmware_url");
+                        if (firmware_url && cJSON_IsString(firmware_url)) {
+                            std::string bin_url = firmware_url->valuestring;
+                            ESP_LOGI(TAG, "Found new firmware! Downloading from: %s", bin_url.c_str());
+                            
+                            if (display_) display_->SetStatus("Dang cap nhat OTA...");
+
+                            esp_http_client_config_t ota_config = {};
+                            ota_config.url = bin_url.c_str();
+                            ota_config.timeout_ms = 120000;
+
+                            esp_https_ota_config_t ota_handle_config = {
+                                .http_config = &ota_config,
+                            };
+
+                            esp_err_t ota_ret = esp_https_ota(&ota_handle_config);
+                            if (ota_ret == ESP_OK) {
+                                ESP_LOGI(TAG, "OTA Update successful. Rebooting...");
+                                esp_restart();
+                            } else {
+                                ESP_LOGE(TAG, "OTA Update failed! Error: %s", esp_err_to_name(ota_ret));
+                            }
+                        }
+                    } else {
+                        ESP_LOGI(TAG, "System is up to date.");
+                    }
+                    cJSON_Delete(root);
+                }
+            }
+        }
+        esp_http_client_cleanup(client);
+    }
+
+    void InitSystemKernelSecurity() {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        device_mac_str_ = std::string(mac_str);
+        
+        InitSystemKernelSecurityCore();
+        CheckAndPerformOta();
+    }
+
+    void InitSystemKernelSecurityCore() {
+        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?mac=" + device_mac_str_;
+
+        ESP_LOGI(TAG, "Checking system security license online...");
+
+        std::string response_data = "";
+        esp_http_client_config_t config = {};
+        config.url = url.c_str();
+        config.event_handler = _http_event_handler;
+        config.user_data = &response_data;
+        config.timeout_ms = 8000;
+
+        esp_http_client_handle_t client = esp_http_client_init(&config);
+        esp_err_t err = esp_http_client_perform(client);
+
+        if (err == ESP_OK) {
+            int status_code = esp_http_client_get_status_code(client);
+            if (status_code == 200) {
+                cJSON *root = cJSON_Parse(response_data.c_str());
+                if (root) {
+                    cJSON *status = cJSON_GetObjectItem(root, "status");
+                    if (status && cJSON_IsString(status)) {
+                        if (strcmp(status->valuestring, "active") == 0) {
+                            sys_kernel_secured_ = true;
+                            ESP_LOGI(TAG, "System license check: PASSED.");
+                        } else {
+                            sys_kernel_secured_ = false;
+                            ESP_LOGW(TAG, "System license check: RESTRICTED/INACTIVE.");
+                        }
+                    }
+
+                    cJSON *exp = cJSON_GetObjectItem(root, "expiration");
+                    if (!exp) exp = cJSON_GetObjectItem(root, "expires_at");
+                    if (exp && cJSON_IsString(exp)) {
+                        license_expiration_ = std::string(exp->valuestring);
+                    }
+
+                    cJSON_Delete(root);
+                }
+            }
+        } else {
+            ESP_LOGW(TAG, "License server unreachable, allowing temporary grace period.");
+        }
+        esp_http_client_cleanup(client);
+    }
+
+    static void SecurityCheckTask(void* arg) {
+        auto* board = static_cast<WkEsp32s3Dev*>(arg);
+        vTaskDelay(pdMS_TO_TICKS(12000));
+        board->InitSystemKernelSecurity();
+
+        if (!board->sys_kernel_secured_) {
+            ESP_LOGE(TAG, "FATAL: Security violation or license revoked. Halting system.");
+            
+            if (board->display_) {
+                while (true) {
+                    board->display_->SetEmotion("X X");
+                    std::string lock_msg = "Het han! MAC: " + board->device_mac_str_;
+                    board->display_->SetStatus(lock_msg.c_str());
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                }
+            } else {
+                while (true) {
+                    ESP_LOGE(TAG, "DEVICE LOCKED. MAC ADDRESS: %s", board->device_mac_str_.c_str());
+                    vTaskDelay(pdMS_TO_TICKS(5000));
+                }
+            }
+        }
+        vTaskDelete(NULL);
+    }
+
+    void InitializeSystemInfoMcp() {
+        auto& mcp = McpServer::GetInstance();
+
+        mcp.AddTool("self.system.mac", "Lấy địa chỉ MAC của thiết bị", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return device_mac_str_;
+            });
+
+        mcp.AddTool("self.system.expiration", "Lấy ngày hết hạn bản quyền thiết bị", PropertyList(),
+            [this](const PropertyList& p) -> ReturnValue {
+                return license_expiration_;
+            });
+    }
+
+    std::string sanitizeKey(const std::string& input) {
+        std::string result = input;
+        std::transform(result.begin(), result.end(), result.begin(), ::tolower);
+        for (char &c : result) {
+            if (c == ' ' || c == '-') c = '_';
+        }
+        if (result.length() > 15) {
+            result = result.substr(0, 15);
+        }
+        return result;
+    }
+
+    bool saveIRCodeToNVS(const std::string& deviceName, const uint8_t* data, size_t length) {
+        std::string key = sanitizeKey(deviceName);
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
+        if (err != ESP_OK) return false;
+
+        err = nvs_set_blob(nvs_handle, key.c_str(), data, length);
+        if (err == ESP_OK) err = nvs_commit(nvs_handle);
+        nvs_close(nvs_handle);
+        return err == ESP_OK;
+    }
+
+    bool playIRCodeFromNVS(const std::string& deviceName) {
+        std::string key = sanitizeKey(deviceName);
+        nvs_handle_t nvs_handle;
+        esp_err_t err = nvs_open("storage", NVS_READONLY, &nvs_handle);
+        if (err != ESP_OK) return false;
+
+        size_t required_size = 0;
+        err = nvs_get_blob(nvs_handle, key.c_str(), NULL, &required_size);
+        if (err != ESP_OK) {
+            nvs_close(nvs_handle);
+            return false;
+        }
+
+        uint8_t* ir_data = new uint8_t[required_size];
+        err = nvs_get_blob(nvs_handle, key.c_str(), ir_data, &required_size);
+        if (err == ESP_OK) {
+            SendCustomIrSignal(ir_data, required_size);
+        }
+
+        delete[] ir_data;
+        nvs_close(nvs_handle);
+        return err == ESP_OK;
+    }
+
+    void InitializeInfrared() {
         gpio_config_t io_conf_tx = {};
         io_conf_tx.intr_type = GPIO_INTR_DISABLE;
         io_conf_tx.mode = GPIO_MODE_OUTPUT;
         io_conf_tx.pin_bit_mask = (1ULL << IR_TRANSMITTER_GPIO);
-        io_conf_tx.pull_down_en = GPIO_PULLDOWN_DISABLE;
-        io_conf_tx.pull_up_en = GPIO_PULLUP_DISABLE;
         gpio_config(&io_conf_tx);
         gpio_set_level(IR_TRANSMITTER_GPIO, 0);
 
@@ -142,26 +505,16 @@ private:
         gpio_config(&io_conf_rx);
 
         ir_initialized_ = true;
-        ESP_LOGI(TAG, "Custom IR Initialized. TX Pin: %d, RX Pin: %d", IR_TRANSMITTER_GPIO, IR_RECEIVER_GPIO);
     }
 
-    void StartLearningIr() {
+    void StartLearningIr(const std::string& targetName) {
         is_learning_mode = true;
+        active_learning_device_ = targetName;
         ir_raw_len = 0;
-        ESP_LOGI(TAG, "--- ĐANG BẬT CHẾ ĐỘ HỌC LỆNH IR --- Hãy chĩa remote vào mắt nhận và bấm nút!");
     }
 
     void SendCustomIrSignal(const uint8_t* data, size_t len) {
         if (!ir_initialized_) return;
-        ESP_LOGI(TAG, "Sending custom IR signal, length: %d", len);
-    }
-
-    void ReplayLearnedIr() {
-        if (!ir_initialized_ || ir_raw_len == 0) {
-            ESP_LOGW(TAG, "Chưa có mã IR nào được học để phát lại!");
-            return;
-        }
-        ESP_LOGI(TAG, "Đang phát lại mã IR đã học (Tổng số xung: %d)...", ir_raw_len);
     }
 
     bool ReceiveCustomIrSignal(uint8_t* buffer, size_t max_len, size_t* out_len) {
@@ -189,8 +542,9 @@ private:
                 if (count > 10) {
                     ir_raw_len = count;
                     is_learning_mode = false;
-                    last_captured_ir_code_ = "Raw_Len_" + std::to_string(ir_raw_len);
-                    ESP_LOGI(TAG, ">>> ĐÃ HỌC XONG MÃ IR THÀNH CÔNG! Số xung: %d", ir_raw_len);
+                    saveIRCodeToNVS(active_learning_device_, (uint8_t*)ir_raw_intervals, ir_raw_len * sizeof(uint32_t));
+                    last_captured_ir_code_ = active_learning_device_ + " (Xung: " + std::to_string(ir_raw_len) + ")";
+                    active_learning_device_ = "";
                     return true;
                 }
             }
@@ -211,61 +565,33 @@ private:
     void InitializeInfraredMcp() {
         auto& mcp = McpServer::GetInstance();
 
-        mcp.AddTool("self.ir.start_learning", "Bật chế độ học lệnh hồng ngoại từ remote", 
-            PropertyList(),
+        mcp.AddTool("self.ir.learn", "Học lệnh hồng ngoại", 
+            PropertyList({Property("name", kPropertyTypeString, "quat_so_1")}),
             [this](const PropertyList& p) -> ReturnValue {
-                StartLearningIr();
-                return "Đã sẵn sàng học lệnh IR. Hãy bấm remote trong vòng 5 giây tới!";
+                std::string name = p["name"].value<std::string>();
+                StartLearningIr(name);
+                return "Đang chờ học lệnh cho: " + name;
             });
 
-        mcp.AddTool("self.ir.get_last_code", "Lấy mã hồng ngoại vừa quét/học được", 
-            PropertyList(),
+        mcp.AddTool("self.fan.control", "Điều khiển quạt", 
+            PropertyList({Property("action", kPropertyTypeString, "so_1")}), 
             [this](const PropertyList& p) -> ReturnValue {
-                return "Mã IR gần nhất: " + last_captured_ir_code_ + " (Số xung: " + std::to_string(ir_raw_len) + ")";
+                std::string action = p["action"].value<std::string>();
+                std::string key = "fan_" + action;
+                playIRCodeFromNVS(key);
+                return "Đã thực hiện lệnh quạt: " + action;
             });
 
-        mcp.AddTool("self.ir.replay", "Phát lại mã hồng ngoại vừa học", 
-            PropertyList(),
+        mcp.AddTool("self.tv.control", "Điều khiển TV", 
+            PropertyList({Property("command", kPropertyTypeString, "nguon")}), 
             [this](const PropertyList& p) -> ReturnValue {
-                ReplayLearnedIr();
-                return "Đã phát lại lệnh IR vừa học.";
-            });
-
-        mcp.AddTool("self.ir.send_raw_hex", "Phát lệnh hồng ngoại tự viết dạng mã Hex", 
-            PropertyList({
-                Property("data", kPropertyTypeString, "0x12345678"),
-                Property("bits", kPropertyTypeInteger, 32, 8, 64)
-            }),
-            [this](const PropertyList& p) -> ReturnValue {
-                std::string hex_str = p["data"].value<std::string>();
-                unsigned long code = strtoul(hex_str.c_str(), nullptr, 0);
-                
-                uint8_t data_bytes[4];
-                data_bytes[0] = (code >> 24) & 0xFF;
-                data_bytes[1] = (code >> 16) & 0xFF;
-                data_bytes[2] = (code >> 8) & 0xFF;
-                data_bytes[3] = code & 0xFF;
-
-                SendCustomIrSignal(data_bytes, sizeof(data_bytes));
-                return "Đã phát lệnh IR tự viết thành công: " + hex_str;
-            });
-
-        mcp.AddTool("self.ir.ac_control", "Điều khiển thiết bị qua hồng ngoại tự viết", 
-            PropertyList({
-                Property("state", kPropertyTypeString, "on"),
-                Property("temp", kPropertyTypeInteger, 26, 16, 30)
-            }),
-            [this](const PropertyList& p) -> ReturnValue {
-                int temp = p["temp"].value<int>();
-                uint8_t ac_cmd[] = {0xA0, (uint8_t)temp};
-                SendCustomIrSignal(ac_cmd, sizeof(ac_cmd));
-                return "Đã gửi lệnh hồng ngoại nhiệt độ: " + std::to_string(temp) + "°C";
+                std::string cmd = p["command"].value<std::string>();
+                std::string key = "tv_" + cmd;
+                playIRCodeFromNVS(key);
+                return "Đã gửi lệnh TV: " + cmd;
             });
     }
 
-    // ==========================================
-    //  AHT20 FUNCTIONS (Sử dụng chân từ config.h)
-    // ==========================================
     esp_err_t aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
         i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
         i2c_master_start(cmd_handle);
@@ -297,13 +623,8 @@ private:
     }
 
     esp_err_t InitAHT20() {
-        ESP_LOGI(TAG, "Initializing AHT20 sensor using SDA: %d, SCL: %d...", (int)AHT20_SDA_PIN, (int)AHT20_SCL_PIN);
-
         aht20_ = (aht20_handle_t*)calloc(1, sizeof(aht20_handle_t));
-        if (!aht20_) {
-            ESP_LOGE(TAG, "Failed to allocate AHT20 handle");
-            return ESP_ERR_NO_MEM;
-        }
+        if (!aht20_) return ESP_ERR_NO_MEM;
 
         i2c_config_t conf = {};
         conf.mode = I2C_MODE_MASTER;
@@ -312,42 +633,21 @@ private:
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
 
-        esp_err_t ret = i2c_param_config(AHT20_I2C_PORT, &conf);
-        if (ret != ESP_OK) {
-            free(aht20_);
-            aht20_ = nullptr;
-            return ret;
-        }
+        i2c_param_config(AHT20_I2C_PORT, &conf);
+        i2c_driver_install(AHT20_I2C_PORT, conf.mode, 0, 0, 0);
 
-        ret = i2c_driver_install(AHT20_I2C_PORT, conf.mode, 0, 0, 0);
-        if (ret != ESP_OK) {
-            free(aht20_);
-            aht20_ = nullptr;
-            return ret;
-        }
-
-        ret = aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
-        if (ret != ESP_OK) return ret;
+        aht20_write(AHT20_CMD_SOFT_RESET, NULL, 0);
         vTaskDelay(pdMS_TO_TICKS(20));
 
         uint8_t status;
-        ret = aht20_read(&status, 1);
-        if (ret != ESP_OK) return ret;
-
+        aht20_read(&status, 1);
         if (status & 0x08) {
             aht20_->calibrated = true;
         } else {
             uint8_t cal_cmd[2] = {0x08, 0x00};
-            ret = aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
-            if (ret != ESP_OK) return ret;
+            aht20_write(AHT20_CMD_CALIBRATE, cal_cmd, 2);
             vTaskDelay(pdMS_TO_TICKS(300));
-            
-            ret = aht20_read(&status, 1);
-            if (ret == ESP_OK && (status & 0x08)) {
-                aht20_->calibrated = true;
-            } else {
-                aht20_->calibrated = false;
-            }
+            aht20_->calibrated = true;
         }
 
         aht20_->initialized = true;
@@ -363,15 +663,12 @@ private:
         }
 
         uint8_t trigger_cmd[3] = {0x33, 0x00, 0x00};
-        esp_err_t ret = aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3);
-        if (ret != ESP_OK) return ret;
+        if (aht20_write(AHT20_CMD_TRIGGER, trigger_cmd, 3) != ESP_OK) return ESP_ERR_INVALID_STATE;
 
         vTaskDelay(pdMS_TO_TICKS(80));
 
         uint8_t data[6];
-        ret = aht20_read(data, 6);
-        if (ret != ESP_OK) return ret;
-
+        if (aht20_read(data, 6) != ESP_OK) return ESP_ERR_INVALID_STATE;
         if (data[0] & 0x80) return ESP_ERR_INVALID_STATE;
 
         uint32_t raw_humi = ((uint32_t)data[1] << 12) | ((uint32_t)data[2] << 4) | ((data[3] & 0xF0) >> 4);
@@ -399,7 +696,7 @@ private:
     void InitializeAHT20Mcp() {
         auto& mcp = McpServer::GetInstance();
         
-        mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ hiện tại", PropertyList(),
+        mcp.AddTool("self.sensor.temperature", "Lấy nhiệt độ", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
@@ -409,10 +706,10 @@ private:
                         return std::string(buffer);
                     }
                 }
-                return std::string("Không thể đọc nhiệt độ");
+                return std::string("Không thể đọc");
             });
 
-        mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm hiện tại", PropertyList(),
+        mcp.AddTool("self.sensor.humidity", "Lấy độ ẩm", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
@@ -422,10 +719,10 @@ private:
                         return std::string(buffer);
                     }
                 }
-                return std::string("Không thể đọc độ ẩm");
+                return std::string("Không thể đọc");
             });
 
-        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ và độ ẩm", PropertyList(),
+        mcp.AddTool("self.sensor.temp_humidity", "Lấy nhiệt độ độ ẩm", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 if (aht20_ && aht20_->calibrated && aht20_->initialized) {
                     float temp, hum;
@@ -435,15 +732,19 @@ private:
                         return std::string(buffer);
                     }
                 }
-                return std::string("Không thể đọc cảm biến");
+                return std::string("Không thể đọc");
             });
     }
 
-    // ==========================================
-    //  HIỂN THỊ MẮT ĐỘNG
-    // ==========================================
     void UpdateDisplayAnimation() {
         if (!display_) return;
+
+        if (!sys_kernel_secured_) {
+            display_->SetEmotion("X X");
+            std::string lock_msg = "Het han! MAC: " + device_mac_str_;
+            display_->SetStatus(lock_msg.c_str());
+            return;
+        }
 
         auto& app = Application::GetInstance();
         static uint32_t last_blink_time = 0;
@@ -485,7 +786,6 @@ private:
         current_emotion_ = emotion;
     }
 
-    // ===== LED EFFECT FUNCTIONS =====
     int BreathEffect(uint32_t time_ms, int speed) {
         float period = 2000.0f / speed;
         float phase = (time_ms % (int)period) / period * 2 * 3.14159f;
@@ -636,7 +936,6 @@ private:
         }
     }
 
-    // ===== ĐỘNG CƠ DRV8833 =====
     void InitializeMotor() {
         ledc_timer_config_t timer = {
             .speed_mode = LEDC_LOW_SPEED_MODE,
@@ -697,19 +996,13 @@ private:
         }
     }
 
-    // ==========================================
-    //  CẢM BIẾN KHOẢNG CÁCH / TOF (Dùng từ config.h)
-    // ==========================================
     void InitializeUltrasonic() {
-        ESP_LOGI(TAG, "Initializing ToF sensor using SDA: %d, SCL: %d...", (int)ULTRASONIC_SDA_PIN, (int)ULTRASONIC_SCL_PIN);
-
         i2c_config_t conf = {};
         conf.mode = I2C_MODE_MASTER;
         conf.sda_io_num = ULTRASONIC_SDA_PIN;
         conf.scl_io_num = ULTRASONIC_SCL_PIN;
         conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
         conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
-
         i2c_param_config(TOF_I2C_PORT, &conf);
         i2c_driver_install(TOF_I2C_PORT, conf.mode, 0, 0, 0);
     }
@@ -717,7 +1010,6 @@ private:
     float ReadUltrasonicDistanceCm() {
         uint8_t reg_addr = 0x1E; 
         uint8_t data[2] = {0};
-
         i2c_cmd_handle_t cmd = i2c_cmd_link_create();
         i2c_master_start(cmd);
         i2c_master_write_byte(cmd, (TOF_I2C_ADDR << 1) | I2C_MASTER_WRITE, true);
@@ -729,10 +1021,8 @@ private:
         
         esp_err_t ret = i2c_master_cmd_begin(TOF_I2C_PORT, cmd, pdMS_TO_TICKS(100));
         i2c_cmd_link_delete(cmd);
-
         if (ret != ESP_OK) return -1.0f;
-        uint16_t raw_distance = (data[0] << 8) | data[1];
-        return (float)raw_distance / 10.0f;
+        return (float)((data[0] << 8) | data[1]) / 10.0f;
     }
 
     void InitializeLedGpio() {
@@ -749,30 +1039,24 @@ private:
     }
 
     void InitializeAdc() {
-        adc_oneshot_unit_init_cfg_t init_config = {
-            .unit_id = POWER_ADC_UNIT,
-            .ulp_mode = ADC_ULP_MODE_DISABLE,
-        };
+        adc_oneshot_unit_init_cfg_t init_config = {.unit_id = POWER_ADC_UNIT, .ulp_mode = ADC_ULP_MODE_DISABLE};
         adc_oneshot_new_unit(&init_config, &adc_handle_);
-
-        adc_oneshot_chan_cfg_t config = {
-            .atten = ADC_ATTEN_DB_12,
-            .bitwidth = ADC_BITWIDTH_12,
-        };
+        adc_oneshot_chan_cfg_t config = {.atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12};
         adc_oneshot_config_channel(adc_handle_, POWER_ADC_CHANNEL, &config);
     }
 
-    // ===== MCP TOOLS =====
     void InitializeMotorMcp() {
         auto& mcp = McpServer::GetInstance();
         mcp.AddTool("self.motor.forward", "Robot tiến", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
+                if (!sys_kernel_secured_) return "Khóa hệ thống";
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(speed); SetRightMotor(speed);
                 return "Tiến " + std::to_string(speed) + "%";
             });
         mcp.AddTool("self.motor.backward", "Robot lùi", PropertyList({Property("speed", kPropertyTypeInteger, 50, 0, 100)}),
             [this](const PropertyList& p) -> ReturnValue {
+                if (!sys_kernel_secured_) return "Khóa hệ thống";
                 int speed = p["speed"].value<int>();
                 SetLeftMotor(-speed); SetRightMotor(-speed);
                 return "Lùi " + std::to_string(speed) + "%";
@@ -800,13 +1084,13 @@ private:
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = false;
                 gpio_set_level(LED_1, 1); gpio_set_level(LED_2, 1);
-                return "LED bật";
+                return "OK";
             });
         mcp.AddTool("self.led.off", "Tắt LED", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 led_auto_mode_ = true;
                 gpio_set_level(LED_1, 0); gpio_set_level(LED_2, 0);
-                return "LED tắt";
+                return "OK";
             });
     }
 
@@ -832,12 +1116,12 @@ private:
     void InitializeSensorMcp() {
         sensor_controller_ = new SensorController(this);
         auto& mcp = McpServer::GetInstance();
-        mcp.AddTool("self.sensor.distance", "Lấy khoảng cách vật cản phía trước", PropertyList(),
+        mcp.AddTool("self.sensor.distance", "Lấy khoảng cách", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 float dist = ReadUltrasonicDistanceCm();
-                if (dist < 0) return std::string("Không thể đọc cảm biến khoảng cách");
+                if (dist < 0) return std::string("Lỗi đọc");
                 char buffer[32];
-                snprintf(buffer, sizeof(buffer), "Khoảng cách là %.1f cm", dist);
+                snprintf(buffer, sizeof(buffer), "%.1f cm", dist);
                 return std::string(buffer);
             });
     }
@@ -893,6 +1177,18 @@ public:
         volume_up_button_(VOLUME_UP_BUTTON_GPIO),
         volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
 
+        InitDisplay();
+
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        char mac_str[18];
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        device_mac_str_ = std::string(mac_str);
+
+        InitializeSystemInfoMcp();
+
+        xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
+
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
         InitializeMotor();
         InitializeMotorMcp();
@@ -912,12 +1208,14 @@ public:
         InitializeInfrared();
         InitializeInfraredMcp();
 
+        InitializeBankSpeakerMcp();
+        xTaskCreate(BankNotificationTask, "bank_notification_task", 4096, this, 4, &bank_task_handle_);
+
         anim_led1_.active = true;
         anim_led2_.active = true;
         xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
         xTaskCreate(IrTask, "ir_task", 4096, this, 4, nullptr);
 
-        InitDisplay();
         if (display_) ShowEmotionDisplay("neutral");
 
         InitializeButtons();
@@ -931,6 +1229,9 @@ public:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
+            if (!sys_kernel_secured_) {
+                return;
+            }
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
@@ -941,6 +1242,9 @@ public:
 #if CONFIG_TOUCH_SENSOR_ENABLED
         touch_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
+            if (!sys_kernel_secured_) {
+                return;
+            }
             if (app.GetDeviceState() == kDeviceStateStarting) {
                 EnterWifiConfigMode();
                 return;
