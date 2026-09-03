@@ -119,7 +119,7 @@ void WkEsp32s3Dev::InitializeButtons() {
 }
 
 void WkEsp32s3Dev::InitializeTools() {
-    auto& mcp_server = McpServer::GetInstance();
+   // auto& mcp_server = McpServer::GetInstance();
     // Đăng ký các tool MCP cơ bản nếu cần tương thích đúng chuẩn
 }
 
