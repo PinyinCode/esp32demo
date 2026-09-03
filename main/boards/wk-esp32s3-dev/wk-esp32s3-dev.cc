@@ -37,6 +37,10 @@
 
 #define TAG "WkEsp32s3Dev"
 
+// --- ĐỊNH NGHĨA CÁC ĐƯỜNG DẪN API NGÂN HÀNG CHO MCP ---
+#define API_BANK_STATS   "/api/stats/daily-total"
+#define API_BANK_HISTORY "/api/stats/daily-total"
+
 class WkEsp32s3Dev;
 
 #define AHT20_CMD_CALIBRATE    0xBE
@@ -142,7 +146,7 @@ private:
     }
 
     std::string HttpGetRequest(const std::string& endpoint) {
-        std::string url = std::string(SERVER_BASE_URL) + endpoint + "?chipid=" + device_chipid_str_;
+        std::string url = std::string(SERVER_BASE_URL) + endpoint + "/" + device_chipid_str_;
         std::string response_data = "";
 
         esp_http_client_config_t config = {};
@@ -172,7 +176,7 @@ private:
                 continue;
             }
 
-            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?chipid=" + board->device_chipid_str_;
+            std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_BANK_AUDIO) + "?chip_id=" + board->device_chipid_str_;
             std::string response_data = "";
 
             esp_http_client_config_t config = {};
@@ -228,31 +232,34 @@ private:
                 return "Đã tắt tính năng loa thông báo chuyển khoản.";
             });
 
-        mcp.AddTool("self.bank.history", "Xem các giao dịch chuyển khoản gần đây", 
-            PropertyList({Property("limit", kPropertyTypeInteger, 3, 1, 10)}),
+        mcp.AddTool("self.bank.history", "Xem các giao dịch chuyển khoản gần đây trong 24 giờ qua", 
+            PropertyList({Property("limit", kPropertyTypeInteger, 5, 1, 10)}),
             [this](const PropertyList& p) -> ReturnValue {
                 int limit = p["limit"].value<int>();
-                std::string endpoint = std::string(API_BANK_HISTORY) + "?limit=" + std::to_string(limit);
-                std::string json_res = HttpGetRequest(endpoint);
+                std::string json_res = HttpGetRequest(API_BANK_HISTORY);
                 
                 if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
 
                 cJSON *root = cJSON_Parse(json_res.c_str());
                 if (!root) return "Lỗi phân tích dữ liệu từ server.";
 
-                std::string summary = "Các giao dịch gần nhất:\n";
+                std::string summary = "Các giao dịch gần nhất trong 24h qua:\n";
                 cJSON *txs = cJSON_GetObjectItem(root, "transactions");
                 if (txs && cJSON_IsArray(txs)) {
                     int count = cJSON_GetArraySize(txs);
                     if (count == 0) {
                         cJSON_Delete(root);
-                        return "Chưa có giao dịch nào gần đây.";
+                        return "Chưa có giao dịch nào trong 24 giờ qua.";
                     }
-                    for (int i = 0; i < count; i++) {
+                    int display_count = count < limit ? count : limit;
+                    for (int i = 0; i < display_count; i++) {
                         cJSON *item = cJSON_GetArrayItem(txs, i);
-                        cJSON *msg = cJSON_GetObjectItem(item, "message");
-                        if (msg && cJSON_IsString(msg)) {
-                            summary += "- " + std::string(msg->valuestring) + "\n";
+                        cJSON *amt = cJSON_GetObjectItem(item, "amount");
+                        cJSON *content = cJSON_GetObjectItem(item, "content");
+                        if (amt && content) {
+                            char line[256];
+                            snprintf(line, sizeof(line), "- Số tiền: %d đ | Nội dung: %s\n", amt->valueint, content->valuestring);
+                            summary += std::string(line);
                         }
                     }
                 }
@@ -260,7 +267,7 @@ private:
                 return summary;
             });
 
-        mcp.AddTool("self.bank.stats", "Xem thống kê tổng số tiền và số lượng giao dịch trong ngày", PropertyList(),
+        mcp.AddTool("self.bank.stats", "Xem thống kê tổng số tiền và số lượng giao dịch trong 24 giờ qua", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
                 std::string json_res = HttpGetRequest(API_BANK_STATS);
                 if (json_res.empty()) return "Không thể kết nối đến máy chủ ngân hàng.";
@@ -268,12 +275,12 @@ private:
                 cJSON *root = cJSON_Parse(json_res.c_str());
                 if (!root) return "Lỗi phân tích dữ liệu từ server.";
 
-                cJSON *total_amt = cJSON_GetObjectItem(root, "total_amount");
-                cJSON *total_cnt = cJSON_GetObjectItem(root, "total_transactions");
+                cJSON *total_amt = cJSON_GetObjectItem(root, "total_amount_in_24h");
+                cJSON *total_cnt = cJSON_GetObjectItem(root, "total_transactions_in_24h");
 
                 if (total_amt && total_cnt) {
                     char buf[128];
-                    snprintf(buf, sizeof(buf), "Tổng kết: Có %d giao dịch, tổng số tiền là %d đồng.", 
+                    snprintf(buf, sizeof(buf), "Tổng kết 24h: Có %d giao dịch, tổng số tiền là %d đồng.", 
                              total_cnt->valueint, total_amt->valueint);
                     cJSON_Delete(root);
                     return std::string(buf);
@@ -284,14 +291,12 @@ private:
 
         mcp.AddTool("self.bank.check_email", "Kiểm tra email ngân hàng mới ngay lập tức", PropertyList(),
             [this](const PropertyList& p) -> ReturnValue {
-                std::string json_res = HttpGetRequest(API_TRIGGER_EMAIL);
-                if (json_res.empty()) return "Không thể kết nối đến máy chủ để quét email.";
-                return "Đã kích hoạt quét email thành công. Hệ thống đang kiểm tra...";
+                return "Hệ thống tự động xử lý qua Webhook SePay.";
             });
     }
 
     void CheckAndPerformOta() {
-        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?chipid=" + device_chipid_str_;
+        std::string url = std::string(OTA_SERVER_URL) + std::string(API_CHECK_UPDATE) + "?chip_id=" + device_chipid_str_;
 
         ESP_LOGI(TAG, "Checking OTA update from: %s", url.c_str());
 
@@ -361,7 +366,7 @@ private:
     }
 
     void InitSystemKernelSecurityCore() {
-        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?chipid=" + device_chipid_str_;
+        std::string url = std::string(SERVER_BASE_URL) + std::string(API_CHECK_LICENSE) + "?chip_id=" + device_chipid_str_;
 
         ESP_LOGI(TAG, "Checking system security license online...");
 
