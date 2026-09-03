@@ -119,20 +119,14 @@ void WkEsp32s3Dev::InitializeButtons() {
 }
 
 void WkEsp32s3Dev::InitializeTools() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) {
-        return;
-    }
-    // Đăng ký các tool MCP cơ bản nếu cần tương thích đúng chuẩn 1 tham số
+    auto& mcp_server = McpServer::GetInstance();
+    // Đăng ký các tool MCP cơ bản nếu cần tương thích đúng chuẩn
 }
 
 void WkEsp32s3Dev::InitializeSystemInfoMcp() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) {
-        return;
-    }
+    auto& mcp_server = McpServer::GetInstance();
     
-    mcp_server->AddTool(
+    mcp_server.AddTool(
         "get_system_info",
         "Get device system information including chip ID and version",
         PropertyList{},
