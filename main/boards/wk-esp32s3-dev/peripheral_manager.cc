@@ -73,7 +73,6 @@ void WkEsp32s3Dev::UpdateEmotionByState() {
     auto state = app.GetDeviceState();
     if (state == kDeviceStateListening) ShowEmotionDisplay("listening");
     else if (state == kDeviceStateSpeaking) ShowEmotionDisplay("speaking");
-    // Sửa lỗi kDeviceStateThinking thành kDeviceStateConnecting hoặc kDeviceStateIdle tùy thuộc vào hệ thống, ở đây dùng kDeviceStateConnecting làm ví dụ an toàn
     else if (state == kDeviceStateConnecting) ShowEmotionDisplay("thinking");
 }
 
@@ -120,7 +119,6 @@ void WkEsp32s3Dev::InitializeMotorMcp() {
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
     auto& mcp_server = McpServer::GetInstance();
 
-    // Sử dụng cú pháp khởi tạo PropertyList của framework thay vì push_back
     PropertyList properties = {
         {"left", {"integer", "Tốc độ động cơ trái", true}},
         {"right", {"integer", "Tốc độ động cơ phải", true}}
@@ -128,7 +126,7 @@ void WkEsp32s3Dev::InitializeMotorMcp() {
 
     mcp_server.AddTool("self.motor.set_speed", "Điều khiển tốc độ động cơ trái và phải", 
         properties, 
-        [this](PropertyList& args) -> ReturnValue {
+        [this](const PropertyList& args) -> ReturnValue {
             if (args.contains("left") && args.contains("right")) {
                 SetLeftMotor(args.Get<int>("left"));
                 SetRightMotor(args.Get<int>("right"));
@@ -149,7 +147,7 @@ void WkEsp32s3Dev::InitializeVolumeMcp() {
 
     mcp_server.AddTool("self.audio.set_volume", "Thay đổi âm lượng loa (0-100)", 
         properties, 
-        [this](PropertyList& args) -> ReturnValue {
+        [this](const PropertyList& args) -> ReturnValue {
             if (args.contains("volume")) {
                 current_volume_ = args.Get<int>("volume");
                 if (audio_codec_) audio_codec_->SetOutputVolume(current_volume_);
@@ -169,7 +167,7 @@ void WkEsp32s3Dev::InitializeLedMcp() {
 
     mcp_server.AddTool("self.led.set_effect", "Thiết lập hiệu ứng LED sáng", 
         properties, 
-        [this](PropertyList& args) -> ReturnValue {
+        [this](const PropertyList& args) -> ReturnValue {
             if (args.contains("pattern")) {
                 anim_led1_.pattern = (LedPattern)args.Get<int>("pattern");
                 return std::string("{\"status\": \"success\"}");
@@ -188,7 +186,7 @@ void WkEsp32s3Dev::InitializeEmotionMcp() {
 
     mcp_server.AddTool("self.display.set_emotion", "Thay đổi biểu cảm khuôn mặt trên màn hình", 
         properties, 
-        [this](PropertyList& args) -> ReturnValue {
+        [this](const PropertyList& args) -> ReturnValue {
             if (args.contains("emotion")) {
                 ExecuteEmotion(args.Get<std::string>("emotion"));
                 return std::string("{\"status\": \"success\"}");
