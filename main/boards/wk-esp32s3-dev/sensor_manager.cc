@@ -75,10 +75,11 @@ void WkEsp32s3Dev::UpdateSensorData() {
 }
 
 void WkEsp32s3Dev::InitializeAHT20Mcp() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) return;
+    // Sửa thành tham chiếu & và bỏ check nullptr
+    auto& mcp_server = McpServer::GetInstance();
 
-    mcp_server->AddTool(
+    // Dùng dấu chấm (.) thay vì toán tử ->
+    mcp_server.AddTool(
         "self.sensor.get_env", 
         "Lấy nhiệt độ và độ ẩm từ cảm biến AHT20", 
         PropertyList{}, 
@@ -107,10 +108,11 @@ void WkEsp32s3Dev::InitializeAdc() {
 }
 
 void WkEsp32s3Dev::InitializeBatteryMcp() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) return;
+    // Sửa thành tham chiếu & và bỏ check nullptr
+    auto& mcp_server = McpServer::GetInstance();
 
-    mcp_server->AddTool(
+    // Dùng dấu chấm (.) thay vì toán tử ->
+    mcp_server.AddTool(
         "self.sensor.get_battery", 
         "Lấy phần trăm dung lượng pin", 
         PropertyList{}, 
@@ -121,10 +123,11 @@ void WkEsp32s3Dev::InitializeBatteryMcp() {
 }
 
 void WkEsp32s3Dev::InitializeSensorMcp() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) return;
+    // Sửa thành tham chiếu & và bỏ check nullptr
+    auto& mcp_server = McpServer::GetInstance();
 
-    mcp_server->AddTool(
+    // Dùng dấu chấm (.) thay vì toán tử ->
+    mcp_server.AddTool(
         "self.sensor.get_distance", 
         "Lấy khoảng cách từ cảm biến ToF/Ultrasonic", 
         PropertyList{}, 
