@@ -1,4 +1,8 @@
 #include "wk_esp32s3_dev.h"
+#include "mcp_server.h"
+#include <esp_timer.h>
+#include <esp_log.h>
+#include <cstdio>
 
 esp_err_t WkEsp32s3Dev::aht20_write(uint8_t cmd, const uint8_t* data, size_t len) {
     i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
@@ -71,17 +75,19 @@ void WkEsp32s3Dev::UpdateSensorData() {
 }
 
 void WkEsp32s3Dev::InitializeAHT20Mcp() {
-    McpServer::GetInstance().AddTool(
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) return;
+
+    mcp_server->AddTool(
         "self.sensor.get_env", 
         "Lấy nhiệt độ và độ ẩm từ cảm biến AHT20", 
-        PropertyList{}, // <--- Thêm tham số properties
-        [this](const PropertyList& args, std::string& result) { // <--- Đổi const cJSON* thành const PropertyList&
+        PropertyList{}, 
+        [this](const PropertyList& args) -> ReturnValue {
             float t = 0, h = 0;
             ReadAHT20(&t, &h);
             char buf[128];
             snprintf(buf, sizeof(buf), "{\"temperature\": %.2f, \"humidity\": %.2f}", t, h);
-            result = buf;
-            return true;
+            return std::string(buf);
         }
     );
 }
@@ -101,28 +107,32 @@ void WkEsp32s3Dev::InitializeAdc() {
 }
 
 void WkEsp32s3Dev::InitializeBatteryMcp() {
-    McpServer::GetInstance().AddTool(
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) return;
+
+    mcp_server->AddTool(
         "self.sensor.get_battery", 
         "Lấy phần trăm dung lượng pin", 
-        PropertyList{}, // <--- Thêm tham số properties
-        [this](const PropertyList& args, std::string& result) { // <--- Đổi kiểu callback
-            result = "{\"battery_percent\": 85}";
-            return true;
+        PropertyList{}, 
+        [this](const PropertyList& args) -> ReturnValue {
+            return std::string("{\"battery_percent\": 85}");
         }
     );
 }
 
 void WkEsp32s3Dev::InitializeSensorMcp() {
-    McpServer::GetInstance().AddTool(
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) return;
+
+    mcp_server->AddTool(
         "self.sensor.get_distance", 
         "Lấy khoảng cách từ cảm biến ToF/Ultrasonic", 
-        PropertyList{}, // <--- Thêm tham số properties
-        [this](const PropertyList& args, std::string& result) { // <--- Đổi kiểu callback
+        PropertyList{}, 
+        [this](const PropertyList& args) -> ReturnValue {
             float dist = ReadUltrasonicDistanceCm();
             char buf[64];
             snprintf(buf, sizeof(buf), "{\"distance_cm\": %.2f}", dist);
-            result = buf;
-            return true;
+            return std::string(buf);
         }
     );
 }
