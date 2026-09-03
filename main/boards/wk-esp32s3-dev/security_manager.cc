@@ -1,4 +1,8 @@
 #include "wk_esp32s3_dev.h"
+#include "mcp_server.h"
+#include <esp_log.h>
+#include <esp_https_ota.h>
+#include <cjson/cJSON.h>
 
 void WkEsp32s3Dev::InitSystemKernelSecurity() {
     InitSystemKernelSecurityCore();
@@ -34,7 +38,11 @@ void WkEsp32s3Dev::CheckAndPerformOta() {
                 esp_http_client_config_t ota_config = {};
                 ota_config.url = url->valuestring;
                 ota_config.skip_cert_common_name_check = true;
-                esp_https_ota(&ota_config);
+                
+                esp_https_ota_config_t https_ota_config = {
+                    .http_config = &ota_config,
+                };
+                esp_https_ota(&https_ota_config);
             }
             cJSON_Delete(root);
         }
@@ -61,20 +69,25 @@ void WkEsp32s3Dev::SecurityCheckTask(void* arg) {
 }
 
 void WkEsp32s3Dev::InitializeSystemInfoMcp() {
-    McpServer::GetInstance().AddTool(
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) {
+        return;
+    }
+
+    mcp_server->AddTool(
         "self.system.get_info", 
         "Lấy thông tin chip ID và hạn sử dụng hệ thống", 
-        PropertyList{}, // <--- Thêm tham số properties vào đây để đủ 4 tham số
-        [this](const PropertyList& args, std::string& result) { // <--- Chỉnh kiểu callback cho khớp
+        PropertyList{}, 
+        [this](const PropertyList& args) -> ReturnValue {
             cJSON *root = cJSON_CreateObject();
             cJSON_AddStringToObject(root, "chip_id", device_chipid_str_.c_str());
             cJSON_AddBoolToObject(root, "secured", sys_kernel_secured_);
             cJSON_AddStringToObject(root, "expiration", license_expiration_.c_str());
             char* json_str = cJSON_PrintUnformatted(root);
-            result = json_str;
+            std::string result_str(json_str);
             free(json_str);
             cJSON_Delete(root);
-            return true;
+            return result_str;
         }
     );
 }
