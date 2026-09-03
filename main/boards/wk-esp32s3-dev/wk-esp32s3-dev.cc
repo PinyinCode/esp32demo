@@ -1,4 +1,10 @@
 #include "wk_esp32s3_dev.h"
+#include "application.h"
+#include "mcp_server.h"
+#include <esp_log.h>
+#include <esp_mac.h>
+
+#define TAG "WkEsp32s3Dev"
 
 esp_err_t WkEsp32s3Dev::_http_event_handler(esp_http_client_event_t *evt) {
     switch(evt->event_id) {
@@ -59,8 +65,6 @@ WkEsp32s3Dev::WkEsp32s3Dev() :
 
     InitializeSystemInfoMcp();
 
-    xTaskCreate(SecurityCheckTask, "security_check_task", 4096, this, 3, nullptr);
-
 #ifdef CONFIG_BOARD_WK_HAVE_MOTOR
     InitializeMotor();
     InitializeMotorMcp();
@@ -81,12 +85,6 @@ WkEsp32s3Dev::WkEsp32s3Dev() :
     InitializeInfraredMcp();
 
     InitializeBankSpeakerMcp();
-    xTaskCreate(BankNotificationTask, "bank_notification_task", 4096, this, 4, &bank_task_handle_);
-
-    anim_led1_.active = true;
-    anim_led2_.active = true;
-    xTaskCreate(LedCreativeTask, "led_creative", 8192, this, 5, nullptr);
-    xTaskCreate(IrTask, "ir_task", 4096, this, 4, nullptr);
 
     if (display_) ShowEmotionDisplay("neutral");
 
@@ -101,7 +99,6 @@ WkEsp32s3Dev::WkEsp32s3Dev() :
 void WkEsp32s3Dev::InitializeButtons() {
     boot_button_.OnClick([this]() {
         auto& app = Application::GetInstance();
-        if (!sys_kernel_secured_) return;
         if (app.GetDeviceState() == kDeviceStateStarting) {
             EnterWifiConfigMode();
             return;
@@ -112,7 +109,6 @@ void WkEsp32s3Dev::InitializeButtons() {
 #if CONFIG_TOUCH_SENSOR_ENABLED
     touch_button_.OnClick([this]() {
         auto& app = Application::GetInstance();
-        if (!sys_kernel_secured_) return;
         if (app.GetDeviceState() == kDeviceStateStarting) {
             EnterWifiConfigMode();
             return;
@@ -122,7 +118,29 @@ void WkEsp32s3Dev::InitializeButtons() {
 #endif
 }
 
-void WkEsp32s3Dev::InitializeTools() {}
+void WkEsp32s3Dev::InitializeTools() {
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) {
+        return;
+    }
+    // Đăng ký các tool MCP cơ bản nếu cần tương thích đúng chuẩn 1 tham số
+}
+
+void WkEsp32s3Dev::InitializeSystemInfoMcp() {
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) {
+        return;
+    }
+    
+    mcp_server->AddTool(
+        "get_system_info",
+        "Get device system information including chip ID and version",
+        PropertyList{},
+        [this](const PropertyList& args) -> ReturnValue {
+            return device_chipid_str_;
+        }
+    );
+}
 
 Led* WkEsp32s3Dev::GetLed() {
     static SingleLed led(LED_1);
@@ -146,7 +164,5 @@ AudioCodec* WkEsp32s3Dev::GetAudioCodec() {
 Display* WkEsp32s3Dev::GetDisplay() {
     return display_;
 }
-
-SensorController::SensorController(WkEsp32s3Dev* board) {}
 
 DECLARE_BOARD(WkEsp32s3Dev);
