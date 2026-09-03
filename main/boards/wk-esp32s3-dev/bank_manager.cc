@@ -26,16 +26,15 @@ void WkEsp32s3Dev::BankNotificationTask(void* arg) {
 }
 
 void WkEsp32s3Dev::InitializeBankSpeakerMcp() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) {
-        return;
-    }
+    // Sửa thành tham chiếu (&) và không cần check nullptr
+    auto& mcp_server = McpServer::GetInstance();
 
     // Khai báo property cho tool MCP nếu cần nhận tham số "enabled"
     PropertyList properties;
     properties.push_back({"enabled", "boolean", "Bật hoặc tắt loa thông báo", true});
 
-    mcp_server->AddTool(
+    // Sử dụng dấu chấm (.) thay vì ->
+    mcp_server.AddTool(
         "self.bank.set_speaker", 
         "Bật hoặc tắt loa thông báo ngân hàng", 
         properties, 
