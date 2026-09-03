@@ -21,7 +21,8 @@ esp_err_t WkEsp32s3Dev::aht20_write(uint8_t cmd, const uint8_t* data, size_t len
 esp_err_t WkEsp32s3Dev::aht20_read(uint8_t* data, size_t len) {
     i2c_cmd_handle_t cmd_handle = i2c_cmd_link_create();
     i2c_master_start(cmd_handle);
-    i2c_master_read_byte(cmd_handle, (0x38 << 1) | I2C_MASTER_READ, true);
+    // Gửi địa chỉ I2C với bit Read (1)
+    i2c_master_write_byte(cmd_handle, (0x38 << 1) | I2C_MASTER_READ, true);
     for (size_t i = 0; i < len - 1; i++) {
         i2c_master_read_byte(cmd_handle, &data[i], I2C_MASTER_ACK);
     }
@@ -75,10 +76,7 @@ void WkEsp32s3Dev::UpdateSensorData() {
 }
 
 void WkEsp32s3Dev::InitializeAHT20Mcp() {
-    // Sửa thành tham chiếu & và bỏ check nullptr
     auto& mcp_server = McpServer::GetInstance();
-
-    // Dùng dấu chấm (.) thay vì toán tử ->
     mcp_server.AddTool(
         "self.sensor.get_env", 
         "Lấy nhiệt độ và độ ẩm từ cảm biến AHT20", 
@@ -93,25 +91,21 @@ void WkEsp32s3Dev::InitializeAHT20Mcp() {
     );
 }
 
-void WkEsp32s3Dev::InitializeUltrasonic() {
-    // Khởi tạo giao tiếp I2C hoặc chân GPIO cho cảm biến khoảng cách
-}
+void WkEsp32s3Dev::InitializeUltrasonic() {}
 
 float WkEsp32s3Dev::ReadUltrasonicDistanceCm() {
-    return 25.0f; // Giá trị giả định mẫu
+    return 25.0f;
 }
 
 void WkEsp32s3Dev::InitializeAdc() {
-    adc_oneshot_unit_init_config_t init_config = {};
+    // Sửa tên struct và hàm chuẩn của ESP-IDF ADC Oneshot
+    adc_oneshot_unit_init_cfg_t init_config = {};
     init_config.unit_id = ADC_UNIT_1;
-    esp_adc_oneshot_new_unit(&init_config, &adc_handle_);
+    adc_oneshot_new_unit(&init_config, &adc_handle_);
 }
 
 void WkEsp32s3Dev::InitializeBatteryMcp() {
-    // Sửa thành tham chiếu & và bỏ check nullptr
     auto& mcp_server = McpServer::GetInstance();
-
-    // Dùng dấu chấm (.) thay vì toán tử ->
     mcp_server.AddTool(
         "self.sensor.get_battery", 
         "Lấy phần trăm dung lượng pin", 
@@ -123,10 +117,7 @@ void WkEsp32s3Dev::InitializeBatteryMcp() {
 }
 
 void WkEsp32s3Dev::InitializeSensorMcp() {
-    // Sửa thành tham chiếu & và bỏ check nullptr
     auto& mcp_server = McpServer::GetInstance();
-
-    // Dùng dấu chấm (.) thay vì toán tử ->
     mcp_server.AddTool(
         "self.sensor.get_distance", 
         "Lấy khoảng cách từ cảm biến ToF/Ultrasonic", 
