@@ -1,4 +1,8 @@
 #include "wk_esp32s3_dev.h"
+#include "mcp_server.h"
+#include <esp_log.h>
+
+#define TAG "WkEsp32s3Dev"
 
 void WkEsp32s3Dev::BankNotificationTask(void* arg) {
     WkEsp32s3Dev* board = (WkEsp32s3Dev*)arg;
@@ -22,19 +26,26 @@ void WkEsp32s3Dev::BankNotificationTask(void* arg) {
 }
 
 void WkEsp32s3Dev::InitializeBankSpeakerMcp() {
-    McpServer::GetInstance().AddTool(
+    auto mcp_server = McpServer::GetInstance();
+    if (mcp_server == nullptr) {
+        return;
+    }
+
+    // Khai báo property cho tool MCP nếu cần nhận tham số "enabled"
+    PropertyList properties;
+    properties.push_back({"enabled", "boolean", "Bật hoặc tắt loa thông báo", true});
+
+    mcp_server->AddTool(
         "self.bank.set_speaker", 
         "Bật hoặc tắt loa thông báo ngân hàng", 
-        PropertyList{}, 
-        [this](const PropertyList& args, std::string& result) { // <--- Sử dụng const PropertyList& args
+        properties, 
+        [this](const PropertyList& args) -> ReturnValue {
             auto enabled_it = args.find("enabled");
             if (enabled_it != args.end()) {
                 bank_speaker_enabled_ = std::get<bool>(enabled_it->second);
-                result = "{\"status\": \"success\"}";
-                return true;
+                return std::string("{\"status\": \"success\"}");
             }
-            result = "{\"status\": \"error\", \"message\": \"Missing parameter\"}";
-            return false;
+            return std::string("{\"status\": \"error\", \"message\": \"Missing parameter\"}");
         }
     );
 }
