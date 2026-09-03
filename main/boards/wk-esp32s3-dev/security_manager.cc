@@ -4,6 +4,8 @@
 #include <esp_https_ota.h>
 #include <cjson/cJSON.h>
 
+#define TAG "WkEsp32s3DevSecurity"
+
 void WkEsp32s3Dev::InitSystemKernelSecurity() {
     InitSystemKernelSecurityCore();
 }
@@ -69,12 +71,11 @@ void WkEsp32s3Dev::SecurityCheckTask(void* arg) {
 }
 
 void WkEsp32s3Dev::InitializeSystemInfoMcp() {
-    auto mcp_server = McpServer::GetInstance();
-    if (mcp_server == nullptr) {
-        return;
-    }
+    // Sửa thành tham chiếu & và bỏ kiểm tra nullptr
+    auto& mcp_server = McpServer::GetInstance();
 
-    mcp_server->AddTool(
+    // Dùng dấu chấm (.) thay vì toán tử ->
+    mcp_server.AddTool(
         "self.system.get_info", 
         "Lấy thông tin chip ID và hạn sử dụng hệ thống", 
         PropertyList{}, 
